@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+client/dist/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# OPC UA generated PKI (certificates created at runtime)
+server/certificates/
+server/PKI/

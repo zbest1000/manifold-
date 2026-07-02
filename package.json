@@ -1,47 +1,36 @@
 {
-  "name": "mqtt-explore",
-  "version": "1.0.0",
-  "description": "Real-time, AI-powered MQTT network discovery and visualization tool for IoT engineers, SCADA teams, and industrial cybersecurity analysts",
+  "name": "topic-canvas",
+  "version": "2.0.0",
+  "description": "A node-graph explorer for MQTT and OPC UA networks, with an MCP server for AI agents",
   "scripts": {
-    "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm run server:dev\" \"npm run client:dev\"",
     "start": "npm run server:start",
     "server:dev": "cd server && npm run dev",
     "server:start": "cd server && npm start",
     "client:dev": "cd client && npm run dev",
     "client:build": "cd client && npm run build",
     "client:preview": "cd client && npm run preview",
-    "install:all": "npm install && cd server && npm install && cd ../client && npm install --legacy-peer-deps",
+    "mcp": "cd mcp && npm start",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install && cd ../mcp && npm install",
     "build": "npm run client:build",
-    "test": "cd server && npm test",
-    "lint": "cd server && npm run lint && cd ../client && npm run lint"
+    "lint": "cd server && npm run lint"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
   },
   "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=8.0.0"
+    "node": ">=18.0.0"
   },
   "keywords": [
     "mqtt",
+    "opcua",
     "iot",
     "sparkplug",
-    "network-discovery",
-    "websocket",
-    "real-time",
-    "ai",
+    "node-graph",
     "visualization",
-    "industrial",
-    "scada"
+    "mcp",
+    "network-discovery",
+    "real-time"
   ],
-  "author": "MQTT Explore Team",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mqtt-explore/mqtt-explore.git"
-  },
-  "bugs": {
-    "url": "https://github.com/mqtt-explore/mqtt-explore/issues"
-  },
-  "homepage": "https://github.com/mqtt-explore/mqtt-explore#readme"
+  "license": "MIT"
 }

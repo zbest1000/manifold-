@@ -5,154 +5,121 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
-// Import custom modules
-const MQTTDiscoveryService = require('./services/mqttDiscovery');
-const MQTTClientManager = require('./services/mqttClientManager');
-const SparkplugDecoder = require('./services/sparkplugDecoder');
-const AIService = require('./services/aiService');
-const NetworkScanner = require('./services/networkScanner');
-const DataExporter = require('./services/dataExporter');
+const MqttManager = require('./services/mqttManager');
+const OpcuaManager = require('./services/opcuaManager');
+const DiscoveryService = require('./services/discovery');
 
-// Import routes
-const apiRoutes = require('./routes/api');
 const mqttRoutes = require('./routes/mqtt');
-const aiRoutes = require('./routes/ai');
+const opcuaRoutes = require('./routes/opcua');
+const systemRoutes = require('./routes/system');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST']
   }
 });
 
-// Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));
 
-// Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/dist')));
 }
 
-// Initialize services
-const mqttDiscovery = new MQTTDiscoveryService(io);
-const mqttClientManager = new MQTTClientManager(io);
-const sparkplugDecoder = new SparkplugDecoder();
-const aiService = new AIService();
-const networkScanner = new NetworkScanner(io);
-const dataExporter = new DataExporter();
+const mqttManager = new MqttManager(io);
+const opcuaManager = new OpcuaManager(io);
+const discovery = new DiscoveryService(io);
 
-// Store services in app locals for access in routes
-app.locals.services = {
-  mqttDiscovery,
-  mqttClientManager,
-  sparkplugDecoder,
-  aiService,
-  networkScanner,
-  dataExporter
-};
+app.locals.services = { mqttManager, opcuaManager, discovery };
 
-// Routes
-app.use('/api', apiRoutes);
 app.use('/api/mqtt', mqttRoutes);
-app.use('/api/ai', aiRoutes);
+app.use('/api/opcua', opcuaRoutes);
+app.use('/api/system', systemRoutes);
 
-// Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    version: '1.0.0',
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    services: {
-      mqtt: mqttClientManager.getConnectionStatus(),
-      ai: aiService.isAvailable(),
-      scanner: networkScanner.isScanning()
-    }
+    mqttConnections: mqttManager.getConnections().length,
+    opcuaConnections: opcuaManager.getConnections().length
   });
 });
 
-// Socket.IO connection handling
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-
-  // MQTT Discovery events
-  socket.on('start-discovery', (options) => {
-    mqttDiscovery.startDiscovery(options);
+  // Push current state so late-joining clients hydrate immediately
+  socket.emit('state-snapshot', {
+    mqtt: mqttManager.getConnections(),
+    opcua: opcuaManager.getConnections(),
+    discovery: { scanning: discovery.isScanning(), results: discovery.getLastResults() }
   });
 
-  socket.on('stop-discovery', () => {
-    mqttDiscovery.stopDiscovery();
-  });
-
-  // MQTT Connection events
-  socket.on('connect-mqtt', (connectionConfig) => {
-    mqttClientManager.connectToBroker(connectionConfig, socket.id);
+  socket.on('connect-mqtt', (config, ack) => {
+    try {
+      const result = mqttManager.connectToBroker(config || {});
+      if (typeof ack === 'function') ack({ ok: true, ...result });
+    } catch (error) {
+      if (typeof ack === 'function') ack({ ok: false, error: error.message });
+      socket.emit('mqtt-error', { error: error.message });
+    }
   });
 
   socket.on('disconnect-mqtt', (brokerId) => {
-    mqttClientManager.disconnectFromBroker(brokerId);
-  });
-
-  socket.on('subscribe-topic', (data) => {
-    mqttClientManager.subscribeToTopic(data.brokerId, data.topic, data.qos);
-  });
-
-  socket.on('unsubscribe-topic', (data) => {
-    mqttClientManager.unsubscribeFromTopic(data.brokerId, data.topic);
-  });
-
-  socket.on('publish-message', (data) => {
-    mqttClientManager.publishMessage(data.brokerId, data.topic, data.payload, data.options);
-  });
-
-  // Network scanning events
-  socket.on('start-network-scan', (options) => {
-    networkScanner.startScan(options);
-  });
-
-  socket.on('stop-network-scan', () => {
-    networkScanner.stopScan();
-  });
-
-  // AI Query events
-  socket.on('ai-query', async (query) => {
     try {
-      const response = await aiService.processQuery(query, mqttClientManager.getAllData());
-      socket.emit('ai-response', { query, response });
-    } catch (error) {
-      socket.emit('ai-error', { query, error: error.message });
+      mqttManager.disconnectFromBroker(brokerId);
+    } catch {
+      // already gone
     }
   });
 
-  // Data export events
-  socket.on('export-data', async (options) => {
+  socket.on('subscribe-topic', ({ brokerId, topic, qos } = {}) => {
     try {
-      const exportData = await dataExporter.exportData(
-        mqttClientManager.getAllData(), 
-        options
-      );
-      socket.emit('export-ready', exportData);
+      mqttManager.subscribe(brokerId, topic, qos || 0);
     } catch (error) {
-      socket.emit('export-error', { error: error.message });
+      socket.emit('subscription-error', { brokerId, topic, error: error.message });
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-    mqttClientManager.cleanupSocketConnections(socket.id);
+  socket.on('unsubscribe-topic', ({ brokerId, topic } = {}) => {
+    try {
+      mqttManager.unsubscribe(brokerId, topic);
+    } catch (error) {
+      socket.emit('unsubscription-error', { brokerId, topic, error: error.message });
+    }
+  });
+
+  socket.on('publish-message', ({ brokerId, topic, payload, options } = {}) => {
+    mqttManager.publish(brokerId, topic, payload, options).catch((error) => {
+      socket.emit('publish-error', { brokerId, topic, error: error.message });
+    });
+  });
+
+  socket.on('start-discovery', (options) => {
+    discovery.startScan(options || {}).catch((error) => {
+      socket.emit('discovery-error', { error: error.message });
+    });
+  });
+
+  socket.on('stop-discovery', () => discovery.stopScan());
+
+  socket.on('opcua-monitor', ({ connectionId, nodeId, samplingInterval } = {}) => {
+    opcuaManager.monitor(connectionId, nodeId, samplingInterval).catch((error) => {
+      socket.emit('opcua-error', { connectionId, nodeId, error: error.message });
+    });
+  });
+
+  socket.on('opcua-unmonitor', ({ connectionId, nodeId } = {}) => {
+    opcuaManager.unmonitor(connectionId, nodeId).catch(() => {});
   });
 });
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-// Serve React app in production
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../client/dist/index.html'));
@@ -161,13 +128,16 @@ if (process.env.NODE_ENV === 'production') {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🚀 MQTT Explore Server running on port ${PORT}`);
-  console.log(`📡 WebSocket server ready for real-time communication`);
-  
-  // Start background services
-  if (process.env.AUTO_START_DISCOVERY === 'true') {
-    mqttDiscovery.startDiscovery();
-  }
+  console.log(`Topic Canvas server listening on port ${PORT}`);
 });
+
+const shutdown = async () => {
+  mqttManager.shutdown();
+  await opcuaManager.shutdown();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 module.exports = { app, server, io };

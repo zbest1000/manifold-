@@ -1,146 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/mqtt-explore-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="MQTT Explore - Real-time, AI-powered MQTT network discovery and visualization tool" />
-    <meta name="keywords" content="MQTT, IoT, Sparkplug B, Network Discovery, Visualization, Industrial Automation" />
-    <meta name="author" content="MQTT Explore Team" />
-    
-    <!-- Preconnect to external domains -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    
-    <!-- Font imports -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
-    <!-- Theme color -->
-    <meta name="theme-color" content="#3b82f6" />
-    
-    <!-- PWA manifest -->
-    <link rel="manifest" href="/manifest.json" />
-    
-    <title>MQTT Explore - Network Discovery & Visualization</title>
-    
-    <style>
-      /* Loading screen styles */
-      .loading-screen {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 9999;
-        opacity: 1;
-        transition: opacity 0.5s ease-out;
-      }
-      
-      .loading-screen.fade-out {
-        opacity: 0;
-        pointer-events: none;
-      }
-      
-      .loading-content {
-        text-align: center;
-        color: white;
-      }
-      
-      .loading-logo {
-        width: 80px;
-        height: 80px;
-        margin: 0 auto 20px;
-        border: 4px solid rgba(255, 255, 255, 0.3);
-        border-top: 4px solid white;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-      
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      
-      .loading-text {
-        font-family: 'Inter', sans-serif;
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin-bottom: 10px;
-      }
-      
-      .loading-subtitle {
-        font-family: 'Inter', sans-serif;
-        font-size: 0.875rem;
-        opacity: 0.8;
-      }
-      
-      /* Prevent flash of unstyled content */
-      body {
-        margin: 0;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        background-color: #f8fafc;
-      }
-      
-      #root {
-        min-height: 100vh;
-      }
-      
-      /* Dark mode support */
-      @media (prefers-color-scheme: dark) {
-        body {
-          background-color: #0f172a;
-          color: #f1f5f9;
-        }
-      }
-    </style>
+    <meta name="description" content="Topic Canvas — a node-graph explorer for MQTT and OPC UA networks." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <title>Topic Canvas</title>
   </head>
   <body>
-    <div id="root">
-      <!-- Loading screen -->
-      <div class="loading-screen" id="loading-screen">
-        <div class="loading-content">
-          <div class="loading-logo"></div>
-          <div class="loading-text">MQTT Explore</div>
-          <div class="loading-subtitle">Initializing network discovery...</div>
-        </div>
-      </div>
-    </div>
-    
+    <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-    
-    <script>
-      // Remove loading screen once React app loads
-      window.addEventListener('load', () => {
-        setTimeout(() => {
-          const loadingScreen = document.getElementById('loading-screen');
-          if (loadingScreen) {
-            loadingScreen.classList.add('fade-out');
-            setTimeout(() => {
-              loadingScreen.remove();
-            }, 500);
-          }
-        }, 1000);
-      });
-      
-      // Service worker registration
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-              console.log('SW registered: ', registration);
-            })
-            .catch((registrationError) => {
-              console.log('SW registration failed: ', registrationError);
-            });
-        });
-      }
-    </script>
   </body>
 </html>

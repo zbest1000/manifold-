@@ -1,0 +1,27 @@
+{
+  "name": "topic-canvas-mcp",
+  "version": "2.0.0",
+  "description": "MCP server exposing Topic Canvas MQTT + OPC UA exploration tools",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "topic-canvas-mcp": "index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "mqtt",
+    "opcua",
+    "model-context-protocol"
+  ],
+  "license": "MIT"
+}
