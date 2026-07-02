@@ -409,6 +409,145 @@ server.tool(
   }
 );
 
+// ---------------------------------------------------------------------------
+// i3X (CESMII Common Contextual Manufacturing Information API)
+// ---------------------------------------------------------------------------
+server.tool(
+  'i3x_status',
+  'Get the i3X connection status (configured base URL and server /info).',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/i3x/status'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_connect',
+  'Connect to an i3X server by base URL. Verifies it via /info and stores it for subsequent calls.',
+  {
+    baseUrl: z.string().describe('i3X server base URL, e.g. https://api.i3x.dev/v1'),
+    token: z.string().optional().describe('Optional bearer token.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/i3x/connect', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_probe',
+  'Check whether a base URL is a live i3X server (calls /info) without changing state.',
+  { baseUrl: z.string() },
+  async ({ baseUrl }) => {
+    try {
+      return ok(await api('/api/i3x/probe', { method: 'POST', body: JSON.stringify({ baseUrl }) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_namespaces',
+  'List namespaces published by the connected i3X server.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/i3x/namespaces'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_object_types',
+  'List object type definitions from the connected i3X server.',
+  { namespaceUri: z.string().optional() },
+  async ({ namespaceUri }) => {
+    try {
+      const q = namespaceUri ? `?namespaceUri=${encodeURIComponent(namespaceUri)}` : '';
+      return ok(await api(`/api/i3x/objecttypes${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_graph',
+  'Get the i3X object graph (nodes + hierarchical/composition links) for visualization or reasoning.',
+  {
+    typeElementId: z.string().optional().describe('Filter to objects of a type.'),
+    root: z.string().optional().describe('Start from a specific root object id.')
+  },
+  async (args) => {
+    try {
+      const params = new URLSearchParams();
+      if (args.typeElementId) params.set('typeElementId', args.typeElementId);
+      if (args.root) params.set('root', args.root);
+      const q = params.toString() ? `?${params}` : '';
+      return ok(await api(`/api/i3x/graph${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_related',
+  'Get objects related to the given object ids (hierarchical, composition, or graph relationships).',
+  {
+    elementIds: z.array(z.string()),
+    relationshipType: z.string().optional()
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/i3x/related', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_value',
+  'Read current value(s) for i3X object ids.',
+  { elementIds: z.array(z.string()), maxDepth: z.number().optional() },
+  async (args) => {
+    try {
+      return ok(await api('/api/i3x/value', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'i3x_history',
+  'Read historical time-series values for i3X object ids over a time range.',
+  {
+    elementIds: z.array(z.string()),
+    startTime: z.string(),
+    endTime: z.string(),
+    maxDepth: z.number().optional()
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/i3x/history', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`Topic Canvas MCP server running (backend: ${API_URL})`);

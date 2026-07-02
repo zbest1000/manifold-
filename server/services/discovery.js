@@ -5,6 +5,10 @@ const { EventEmitter } = require('events');
 
 const DEFAULT_MQTT_PORTS = [1883, 8883];
 const DEFAULT_OPCUA_PORTS = [4840];
+const DEFAULT_I3X_PORTS = [80, 443, 8080];
+// Common base paths an i3X server might be mounted under; each open HTTP port is
+// checked for a live /info document at one of these prefixes.
+const DEFAULT_I3X_PATHS = ['', '/v1', '/i3x', '/i3x/v1'];
 const PROBE_TIMEOUT_MS = 1200;
 const IDENTIFY_TIMEOUT_MS = 4000;
 const MAX_CONCURRENT_PROBES = 64;
@@ -14,12 +18,26 @@ const MAX_CONCURRENT_PROBES = 64;
  * real protocol handshake to confirm what is listening. No synthetic results.
  */
 class DiscoveryService extends EventEmitter {
-  constructor(io) {
+  constructor(io, deps = {}) {
     super();
     this.io = io;
+    this.i3x = deps.i3x || null; // used to verify discovered i3X HTTP endpoints
     this.scanning = false;
     this.abortRequested = false;
     this.lastResults = [];
+  }
+
+  async identifyI3xServer(host, port) {
+    if (!this.i3x) return null;
+    const scheme = port === 443 ? 'https' : 'http';
+    for (const path of DEFAULT_I3X_PATHS) {
+      const baseUrl = `${scheme}://${host}:${port}${path}`;
+      const info = await this.i3x.probe(baseUrl);
+      if (info) {
+        return { verified: true, baseUrl, serverName: info.serverName || null, specVersion: info.specVersion || null };
+      }
+    }
+    return null;
   }
 
   isScanning() {
@@ -133,9 +151,11 @@ class DiscoveryService extends EventEmitter {
 
     const mqttPorts = options.mqttPorts || DEFAULT_MQTT_PORTS;
     const opcuaPorts = options.opcuaPorts || DEFAULT_OPCUA_PORTS;
+    const i3xPorts = options.i3xPorts || (options.includeI3x === false ? [] : DEFAULT_I3X_PORTS);
     const ports = [
       ...mqttPorts.map((p) => ({ port: p, kind: 'mqtt' })),
-      ...opcuaPorts.map((p) => ({ port: p, kind: 'opcua' }))
+      ...opcuaPorts.map((p) => ({ port: p, kind: 'opcua' })),
+      ...i3xPorts.map((p) => ({ port: p, kind: 'i3x' }))
     ];
 
     const hosts = this.expandCidr(range);
@@ -173,6 +193,13 @@ class DiscoveryService extends EventEmitter {
           } else if (job.kind === 'opcua') {
             // An open 4840 is a strong OPC UA signal; full verification happens on connect
             candidate.endpointUrl = `opc.tcp://${job.host}:${job.port}`;
+          } else if (job.kind === 'i3x') {
+            const identity = await this.identifyI3xServer(job.host, job.port);
+            if (!identity) {
+              // Open HTTP port that isn't an i3X server — not a result we report
+              continue;
+            }
+            Object.assign(candidate, identity);
           }
 
           results.push(candidate);

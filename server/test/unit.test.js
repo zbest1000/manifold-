@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const MqttManager = require('../services/mqttManager');
 const DiscoveryService = require('../services/discovery');
 const CesmiiClient = require('../services/cesmiiClient');
+const I3xClient = require('../services/i3xClient');
 
 const fakeIo = { emit() {} };
 
@@ -70,4 +71,38 @@ test('cesmiiClient.getHistory validates arguments before hitting the network', a
   });
   await assert.rejects(() => c.getHistory([], '2024-01-01', '2024-01-02'), /non-empty array/);
   await assert.rejects(() => c.getHistory(['1'], null, null), /startTime and endTime are required/);
+});
+
+test('i3xClient requires a base URL and normalizes trailing slash', () => {
+  const c = new I3xClient();
+  assert.strictEqual(c.isConfigured(), false);
+  assert.throws(() => c.configure({}), /baseUrl is required/);
+  const status = c.configure({ baseUrl: 'https://api.i3x.dev/v1/' });
+  assert.strictEqual(status.configured, true);
+  assert.strictEqual(status.baseUrl, 'https://api.i3x.dev/v1');
+});
+
+test('i3xClient.buildGraph builds hierarchical + composition edges', () => {
+  const c = new I3xClient();
+  const { nodes, links } = c.buildGraph([
+    { elementId: 'plant', displayName: 'Plant', parentId: null },
+    { elementId: 'line', displayName: 'Line 1', parentId: 'plant', isComposition: true },
+    { elementId: 'motor', displayName: 'Motor', parentId: 'line' }
+  ]);
+  assert.strictEqual(nodes.length, 3);
+  assert.strictEqual(links.length, 2);
+  const comp = links.find((l) => l.target === 'line');
+  assert.strictEqual(comp.kind, 'composition');
+});
+
+test('i3xClient.getValues validates elementIds', async () => {
+  const c = new I3xClient();
+  c.configure({ baseUrl: 'https://api.i3x.dev/v1' });
+  await assert.rejects(() => c.getValues([]), /non-empty array/);
+});
+
+test('discovery accepts an i3x dependency for endpoint verification', () => {
+  const c = new I3xClient();
+  const d = new DiscoveryService({ emit() {} }, { i3x: c });
+  assert.strictEqual(typeof d.identifyI3xServer, 'function');
 });

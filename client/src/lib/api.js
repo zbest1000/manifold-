@@ -64,5 +64,19 @@ export const api = {
   cesmiiReset: () => request('/api/cesmii/config', { method: 'DELETE' }),
   cesmiiEquipment: () => request('/api/cesmii/equipment'),
   cesmiiAttributes: () => request('/api/cesmii/attributes'),
-  cesmiiHistory: (body) => request('/api/cesmii/history', { method: 'POST', body: JSON.stringify(body) })
+  cesmiiHistory: (body) => request('/api/cesmii/history', { method: 'POST', body: JSON.stringify(body) }),
+
+  // i3X
+  i3xStatus: () => request('/api/i3x/status'),
+  i3xConnect: (config) => request('/api/i3x/connect', { method: 'POST', body: JSON.stringify(config) }),
+  i3xReset: () => request('/api/i3x/connect', { method: 'DELETE' }),
+  i3xNamespaces: () => request('/api/i3x/namespaces'),
+  i3xObjectTypes: () => request('/api/i3x/objecttypes'),
+  i3xObjects: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/api/i3x/objects${q ? `?${q}` : ''}`);
+  },
+  i3xValue: (elementIds, maxDepth = 1) =>
+    request('/api/i3x/value', { method: 'POST', body: JSON.stringify({ elementIds, maxDepth }) }),
+  i3xHistory: (body) => request('/api/i3x/history', { method: 'POST', body: JSON.stringify(body) })
 };

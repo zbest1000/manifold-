@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Radar, Play, Square, Radio, Cpu, Plug } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Radar, Play, Square, Radio, Cpu, Plug, Boxes } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
@@ -8,6 +9,7 @@ import PageHeader from '@/components/PageHeader';
 
 export default function Discovery() {
   const discovery = useStore((s) => s.discovery);
+  const navigate = useNavigate();
   const [range, setRange] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -36,13 +38,23 @@ export default function Discovery() {
       if (r.kind === 'mqtt') {
         await api.connectBroker({ host: r.host, port: r.port, protocol: r.port === 8883 ? 'mqtts' : 'mqtt' });
         toast.success(`Connecting to ${r.host}:${r.port}`);
-      } else {
+      } else if (r.kind === 'opcua') {
         await api.connectOpcua({ endpointUrl: r.endpointUrl || `opc.tcp://${r.host}:${r.port}` });
         toast.success(`Connecting to ${r.host}:${r.port}`);
+      } else if (r.kind === 'i3x') {
+        await api.i3xConnect({ baseUrl: r.baseUrl });
+        toast.success(`Connected to i3X at ${r.baseUrl}`);
+        navigate('/i3x');
       }
     } catch (e) {
       toast.error(e.message);
     }
+  };
+
+  const kindMeta = {
+    mqtt: { icon: Radio, cls: 'bg-sky-500/20 text-sky-300' },
+    opcua: { icon: Cpu, cls: 'bg-violet-500/20 text-violet-300' },
+    i3x: { icon: Boxes, cls: 'bg-teal-500/20 text-teal-300' }
   };
 
   const { progress, results, scanning } = discovery;
@@ -52,7 +64,7 @@ export default function Discovery() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="Network Discovery"
-        subtitle="Probe your network for MQTT brokers and OPC UA servers"
+        subtitle="Probe your network for MQTT brokers, OPC UA servers, and i3X endpoints"
         actions={
           scanning ? (
             <Button variant="danger" onClick={stop}>
@@ -107,18 +119,23 @@ export default function Discovery() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {results.map((r) => (
+              {results.map((r) => {
+                const meta = kindMeta[r.kind] || kindMeta.mqtt;
+                const Icon = meta.icon;
+                return (
                 <Card key={`${r.host}:${r.port}`} className="p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`grid h-10 w-10 place-items-center rounded-xl ${r.kind === 'mqtt' ? 'bg-sky-500/20 text-sky-300' : 'bg-violet-500/20 text-violet-300'}`}>
-                        {r.kind === 'mqtt' ? <Radio size={18} /> : <Cpu size={18} />}
+                      <div className={`grid h-10 w-10 place-items-center rounded-xl ${meta.cls}`}>
+                        <Icon size={18} />
                       </div>
                       <div>
                         <p className="mono text-sm font-medium text-slate-100">
                           {r.host}:{r.port}
                         </p>
-                        <p className="text-xs uppercase tracking-wide text-slate-500">{r.kind}</p>
+                        <p className="text-xs uppercase tracking-wide text-slate-500">
+                          {r.kind === 'i3x' ? 'i3X' : r.kind}
+                        </p>
                       </div>
                     </div>
                     {r.verified ? (
@@ -132,13 +149,19 @@ export default function Discovery() {
                       {r.anonymousAccess ? 'Anonymous access allowed' : 'Authentication required'}
                     </p>
                   )}
+                  {r.kind === 'i3x' && (
+                    <p className="mono mt-2 truncate text-xs text-slate-500">
+                      {r.serverName ? `${r.serverName} · ` : ''}{r.baseUrl}
+                    </p>
+                  )}
                   <div className="mt-3 flex justify-end">
                     <Button size="sm" variant="subtle" onClick={() => connectResult(r)}>
                       <Plug size={13} /> Connect
                     </Button>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

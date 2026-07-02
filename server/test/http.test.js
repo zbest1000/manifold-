@@ -49,6 +49,20 @@ test('GET /api/system/status includes all subsystems', async () => {
   assert.ok(body.discovery);
   assert.ok(body.cesmii);
   assert.strictEqual(body.cesmii.configured, false);
+  assert.ok(body.i3x);
+  assert.strictEqual(body.i3x.configured, false);
+});
+
+test('POST /api/i3x/probe requires baseUrl', async () => {
+  const { status, body } = await post('/api/i3x/probe', {});
+  assert.strictEqual(status, 400);
+  assert.match(body.error, /baseUrl is required/);
+});
+
+test('GET /api/i3x/namespaces fails cleanly when not connected', async () => {
+  const { status, body } = await get('/api/i3x/namespaces');
+  assert.strictEqual(status, 400);
+  assert.match(body.error, /not configured/);
 });
 
 test('GET /api/mqtt/brokers starts empty', async () => {

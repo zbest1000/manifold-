@@ -32,7 +32,11 @@ MCP-capable client at the included MCP server.
 - **CESMII SMIP integration** — connect to a Smart Manufacturing Innovation Platform
   instance (two-step JWT handshake handled server-side), list equipment and
   attributes, and pull historical time-series with an inline sparkline.
-- **MCP server** — expose MQTT, OPC UA and CESMII tools to Claude Desktop, IDE
+- **i3X integration** — connect to a CESMII i3X server (the Common Contextual
+  Manufacturing Information API), discover its namespaces and objects, and
+  visualize the object/relationship graph with live values and history. i3X
+  servers are also auto-detected during network discovery.
+- **MCP server** — expose MQTT, OPC UA, CESMII and i3X tools to Claude Desktop, IDE
   agents, or any MCP client.
 
 ---
@@ -42,7 +46,7 @@ MCP-capable client at the included MCP server.
 ```
 Topic Canvas
 ├── server/   Node.js + Express + Socket.IO backend
-│             MQTT (mqtt.js) · OPC UA (node-opcua) · CESMII SMIP · discovery · Sparkplug B
+│             MQTT (mqtt.js) · OPC UA (node-opcua) · CESMII SMIP · i3X · discovery · Sparkplug B
 ├── client/   React + Vite + Tailwind frontend
 │             canvas force-graph, style presets, live data panels
 └── mcp/      Model Context Protocol server (stdio) bridging to the backend REST API
@@ -130,6 +134,9 @@ backend.
 | `cesmii_configure` / `cesmii_status` | Configure and authenticate a CESMII SMIP instance |
 | `cesmii_list_equipment` / `cesmii_list_attributes` | List SMIP equipment and attributes |
 | `cesmii_history` / `cesmii_query` | Pull time-series history or run a raw GraphQL query |
+| `i3x_connect` / `i3x_probe` / `i3x_status` | Connect to, probe, or inspect an i3X server |
+| `i3x_namespaces` / `i3x_object_types` / `i3x_graph` | Discover namespaces, types, and the object graph |
+| `i3x_related` / `i3x_value` / `i3x_history` | Navigate relationships and read current/historical values |
 
 ---
 
@@ -150,6 +157,9 @@ backend.
 | `POST` | `/api/cesmii/config` | Configure + authenticate a SMIP instance |
 | `GET` | `/api/cesmii/equipment` · `/attributes` | List SMIP equipment / attributes |
 | `POST` | `/api/cesmii/history` | Time-series history (`{ ids, startTime, endTime, maxSamples? }`) |
+| `POST` | `/api/i3x/connect` · `/probe` | Connect to / probe an i3X server (`{ baseUrl, token? }`) |
+| `GET` | `/api/i3x/objects` · `/graph` · `/namespaces` | List objects, the object graph, and namespaces |
+| `POST` | `/api/i3x/value` · `/history` | Read current / historical i3X object values |
 
 Real-time updates (messages, broker stats, discovery progress, OPC UA values) are
 delivered over Socket.IO.

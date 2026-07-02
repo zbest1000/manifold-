@@ -128,6 +128,56 @@ export function buildOpcuaGraph(connection, expanded) {
   return { nodes: Array.from(nodes.values()), links };
 }
 
+/**
+ * Build an i3X object graph. Objects carry elementId / displayName / parentId /
+ * isComposition / typeElementId; hierarchical + composition edges come from
+ * parentId. A synthetic server node roots any objects that have no parent.
+ */
+export function buildI3xGraph(server, objects) {
+  const nodes = new Map();
+  const links = [];
+
+  const rootId = `i3x:${server.baseUrl}:root`;
+  nodes.set(rootId, {
+    id: rootId,
+    label: server.info?.serverName || server.baseUrl,
+    group: 'server',
+    kind: 'i3x-server',
+    degree: 0,
+    meta: { baseUrl: server.baseUrl }
+  });
+
+  const ids = new Set(objects.map((o) => o.elementId));
+  for (const o of objects) {
+    const id = `i3x:${server.baseUrl}:${o.elementId}`;
+    nodes.set(id, {
+      id,
+      label: o.displayName || o.elementId,
+      group: o.isComposition ? 'config' : 'topic',
+      kind: 'i3x-object',
+      degree: 0,
+      meta: {
+        elementId: o.elementId,
+        typeElementId: o.typeElementId || null,
+        isComposition: Boolean(o.isComposition)
+      }
+    });
+  }
+
+  for (const o of objects) {
+    const childId = `i3x:${server.baseUrl}:${o.elementId}`;
+    if (o.parentId && ids.has(o.parentId)) {
+      links.push({ source: `i3x:${server.baseUrl}:${o.parentId}`, target: childId });
+    } else {
+      // Orphan objects attach to the server root so nothing floats free
+      links.push({ source: rootId, target: childId });
+    }
+  }
+
+  computeDegree(nodes, links);
+  return { nodes: Array.from(nodes.values()), links };
+}
+
 function opcuaGroup(nodeClass) {
   switch (nodeClass) {
     case 'Variable':
