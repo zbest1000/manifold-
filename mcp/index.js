@@ -265,7 +265,7 @@ server.tool(
 
 server.tool(
   'opcua_browse',
-  'Browse the OPC UA address space at a node. Omit nodeId to start at the Objects folder (ns=0;i=84). Returns child references for building an address-space tree/graph.',
+  'Browse the OPC UA address space at a node. Omit nodeId to start at the Root folder (ns=0;i=84), whose children include the Objects folder (ns=0;i=85). Returns child references for building an address-space tree/graph.',
   {
     connectionId: z.string(),
     nodeId: z.string().optional().describe('Node to browse, e.g. "ns=2;s=Devices". Defaults to Objects root.')
