@@ -37,6 +37,7 @@ export default function ForceGraph({
   const nodesRef = useRef([]);
   const linksRef = useRef([]);
   const dprRef = useRef(1);
+  const centeredRef = useRef(false);
 
   const style = GRAPH_STYLES[styleId] || GRAPH_STYLES.constellation;
   const layout = LAYOUTS[layoutId] || LAYOUTS.organic;
@@ -209,20 +210,6 @@ export default function ForceGraph({
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
 
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      dprRef.current = dpr;
-      const { width, height } = wrap.getBoundingClientRect();
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      draw();
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
-
     const sel = select(canvas);
 
     const zoomBehavior = zoom()
@@ -232,6 +219,28 @@ export default function ForceGraph({
         draw();
       });
     sel.call(zoomBehavior);
+
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      dprRef.current = dpr;
+      const { width, height } = wrap.getBoundingClientRect();
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      // The simulation centers the graph at graph-origin (0,0); translate the
+      // view so that origin sits at the viewport centre on first layout.
+      if (!centeredRef.current && width > 0 && height > 0) {
+        centeredRef.current = true;
+        const initial = zoomIdentity.translate(width / 2, height / 2);
+        transformRef.current = initial;
+        sel.call(zoomBehavior.transform, initial);
+      }
+      draw();
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
 
     const toGraphCoords = (event) => {
       const rect = canvas.getBoundingClientRect();
