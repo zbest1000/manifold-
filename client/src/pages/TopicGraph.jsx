@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
+import ForceGraph3D from '@/graph/ForceGraph3D';
 import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
@@ -202,6 +203,7 @@ export default function TopicGraph() {
           <div className="flex items-center gap-2">
             <div className="flex overflow-hidden rounded-xl border border-white/10">
               <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
+              <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
             </div>
             <select
@@ -240,6 +242,13 @@ export default function TopicGraph() {
               onSelect={selectTopic}
               filter={treeFilter}
             />
+          </div>
+        ) : view === '3d' ? (
+          <div className="relative flex-1">
+            <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+            <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+              Drag to rotate · scroll to zoom · click a node for details
+            </div>
           </div>
         ) : (
           <div className="relative flex-1">

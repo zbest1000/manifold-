@@ -21,10 +21,11 @@ MCP-capable client at the included MCP server.
   are detected and decoded.
 - **OPC UA browsing** — connect to an `opc.tcp://` endpoint, walk the address space
   as a graph, read node attributes, and monitor live variable values.
-- **Two views of every broker** — a classic collapsible **topic tree** (live
+- **Three views of every broker** — a classic collapsible **topic tree** (live
   values with change-flash, retained flags, per-branch counts, sort + filter,
-  publish with QoS/retain, clear-retained, copy, inline plot) and an interactive
-  **node graph**. Switch with one toggle.
+  publish with QoS/retain, clear-retained, copy, inline plot), an interactive 2D
+  **node graph**, and a **3D graph** you orbit with the mouse (drag to rotate
+  both axes, scroll to zoom) to reach any node. Switch with one toggle.
 - **Node-graph visualization** — a smooth canvas force graph with pan/zoom, drag,
   hover-highlight and selection. Nodes scale by connectivity; branches and leaves
   are colored by message/node type. Stays at 60fps with thousands of topics
