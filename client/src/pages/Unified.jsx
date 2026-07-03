@@ -1,14 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Network, Radio, Cpu, Boxes } from 'lucide-react';
+import { Network, Radio, Cpu, Boxes, Share2, Box } from 'lucide-react';
+import clsx from 'clsx';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
+import ForceGraph3D from '@/graph/ForceGraph3D';
 import { buildMqttGraph, buildI3xGraph, mergeGraphs, PROTOCOL_COLORS } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
 import { EmptyState } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
+
+function ViewTab({ active, onClick, icon: Icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
+        active ? 'bg-accent-500/20 text-accent-200' : 'bg-surface-950/60 text-slate-400 hover:text-slate-200'
+      )}
+    >
+      <Icon size={14} />
+      {label}
+    </button>
+  );
+}
 
 /**
  * One canvas that overlays every connected source — MQTT brokers, OPC UA
@@ -27,6 +44,7 @@ export default function Unified() {
   const [i3xGraph, setI3xGraph] = useState(null);
   const [selected, setSelected] = useState(null);
   const [matchIds, setMatchIds] = useState(null);
+  const [view, setView] = useState('graph');
   const graphRef = useRef(null);
 
   const connectedBrokers = brokers.filter((b) => b.status === 'connected');
@@ -89,25 +107,37 @@ export default function Unified() {
       <PageHeader
         title="Unified Network"
         subtitle={`${graph.nodes.length} nodes across ${total} source${total > 1 ? 's' : ''}`}
+        actions={
+          <div className="flex overflow-hidden rounded-xl border border-white/10">
+            <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
+            <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
+          </div>
+        }
       />
       <div className="relative flex-1 overflow-hidden">
-        <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
-        <GraphToolbar
-          onFit={() => graphRef.current?.fitTo()}
-          onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), 'unified-network.png')}
-          onExportJson={() => downloadJson(graphRef.current?.exportGraph(), 'unified-network.json')}
-        />
-        <ForceGraph
-          ref={graphRef}
-          data={graph}
-          styleId={graphStyle}
-          layoutId={graphLayout}
-          selectedId={selected?.id || null}
-          onSelect={setSelected}
-          matchIds={matchIds}
-          minimap={showMinimap}
-          colorByProtocol
-        />
+        {view === '3d' ? (
+          <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} colorByProtocol />
+        ) : (
+          <>
+            <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+            <GraphToolbar
+              onFit={() => graphRef.current?.fitTo()}
+              onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), 'unified-network.png')}
+              onExportJson={() => downloadJson(graphRef.current?.exportGraph(), 'unified-network.json')}
+            />
+            <ForceGraph
+              ref={graphRef}
+              data={graph}
+              styleId={graphStyle}
+              layoutId={graphLayout}
+              selectedId={selected?.id || null}
+              onSelect={setSelected}
+              matchIds={matchIds}
+              minimap={showMinimap}
+              colorByProtocol
+            />
+          </>
+        )}
         <div className="pointer-events-none absolute bottom-4 left-4 flex gap-3 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] backdrop-blur">
           <Legend icon={Radio} color={PROTOCOL_COLORS.mqtt} label="MQTT" />
           <Legend icon={Cpu} color={PROTOCOL_COLORS.opcua} label="OPC UA" />

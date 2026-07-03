@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2 } from 'lucide-react';
+import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
 import { socket } from '@/lib/socket';
 import ForceGraph from '@/graph/ForceGraph';
+import ForceGraph3D from '@/graph/ForceGraph3D';
 import { buildOpcuaGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
@@ -159,6 +160,7 @@ export default function OpcUa() {
             {connection && (
               <div className="flex overflow-hidden rounded-xl border border-white/10">
                 <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
+                <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
                 <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
               </div>
             )}
@@ -227,6 +229,13 @@ export default function OpcUa() {
                   filter={treeFilter}
                 />
               </div>
+            ) : view === '3d' ? (
+              <>
+                <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+                <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+                  Drag to rotate · scroll to zoom · click a node for details
+                </div>
+              </>
             ) : (
               <>
                 <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />

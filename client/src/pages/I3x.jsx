@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search } from 'lucide-react';
+import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search, Box } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
+import ForceGraph3D from '@/graph/ForceGraph3D';
 import { buildI3xGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
@@ -140,6 +141,7 @@ export default function I3x() {
           <div className="flex items-center gap-2">
             <div className="flex overflow-hidden rounded-xl border border-white/10">
               <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Boxes} label="Graph" />
+              <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
             </div>
             <Badge status="connected">i3X {server.info?.specVersion || ''}</Badge>
@@ -169,6 +171,13 @@ export default function I3x() {
               onSelect={setSelected}
               filter={treeFilter}
             />
+          </div>
+        ) : view === '3d' ? (
+          <div className="relative flex-1">
+            <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+            <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+              Drag to rotate · scroll to zoom · click a node for details
+            </div>
           </div>
         ) : (
           <div className="relative flex-1">
