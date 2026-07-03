@@ -1,22 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Boxes, Plug, LogOut, X, Activity, Layers } from 'lucide-react';
+import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search } from 'lucide-react';
+import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 import { buildI3xGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
+import GraphTree from '@/components/GraphTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
 import { useStore } from '@/store/store';
 import { Card, Button, Badge, Input, Field, EmptyState } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
 
+function ViewTab({ active, onClick, icon: Icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
+        active ? 'bg-accent-500/20 text-accent-200' : 'bg-surface-950/60 text-slate-400 hover:text-slate-200'
+      )}
+    >
+      <Icon size={14} />
+      {label}
+    </button>
+  );
+}
+
 export default function I3x() {
   const graphStyle = useStore((s) => s.graphStyle);
   const graphLayout = useStore((s) => s.graphLayout);
   const showMinimap = useStore((s) => s.showMinimap);
   const [matchIds, setMatchIds] = useState(null);
+  const [view, setView] = useState('graph');
+  const [treeFilter, setTreeFilter] = useState('');
   const graphRef = useRef(null);
 
   const [status, setStatus] = useState(null);
@@ -119,6 +138,10 @@ export default function I3x() {
         subtitle={`${server.info?.serverName || server.baseUrl} · ${objects.length} objects · ${namespaces.length} namespaces`}
         actions={
           <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-xl border border-white/10">
+              <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Boxes} label="Graph" />
+              <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
+            </div>
             <Badge status="connected">i3X {server.info?.specVersion || ''}</Badge>
             <Button variant="outline" onClick={disconnect}>
               <LogOut size={15} /> Disconnect
@@ -128,33 +151,54 @@ export default function I3x() {
       />
 
       <div className="relative flex flex-1 overflow-hidden">
-        <div className="relative flex-1">
-          {objects.length === 0 ? (
-            <EmptyState icon={Layers} title="No objects returned" hint="This i3X server exposed no objects." />
-          ) : (
-            <>
-              <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
-              <GraphToolbar
-                onFit={() => graphRef.current?.fitTo()}
-                onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), 'i3x-graph.png')}
-                onExportJson={() => downloadJson(graphRef.current?.exportGraph(), 'i3x-graph.json')}
+        {view === 'tree' ? (
+          <div className="flex w-full max-w-md flex-col border-r border-white/5 bg-surface-900/30">
+            <div className="flex items-center gap-1.5 border-b border-white/5 px-3 py-2">
+              <Search size={14} className="text-slate-500" />
+              <input
+                value={treeFilter}
+                onChange={(e) => setTreeFilter(e.target.value)}
+                placeholder="Filter objects…"
+                className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
               />
-              <ForceGraph
-                ref={graphRef}
-                data={graph}
-                styleId={graphStyle}
-                layoutId={graphLayout}
-                selectedId={selected?.id || null}
-                onSelect={setSelected}
-                matchIds={matchIds}
-                minimap={showMinimap}
-              />
-              <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
-                Object graph · click a node to read its value and history
-              </div>
-            </>
-          )}
-        </div>
+            </div>
+            <GraphTree
+              nodes={graph.nodes}
+              links={graph.links}
+              selectedId={selected?.id || null}
+              onSelect={setSelected}
+              filter={treeFilter}
+            />
+          </div>
+        ) : (
+          <div className="relative flex-1">
+            {objects.length === 0 ? (
+              <EmptyState icon={Layers} title="No objects returned" hint="This i3X server exposed no objects." />
+            ) : (
+              <>
+                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+                <GraphToolbar
+                  onFit={() => graphRef.current?.fitTo()}
+                  onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), 'i3x-graph.png')}
+                  onExportJson={() => downloadJson(graphRef.current?.exportGraph(), 'i3x-graph.json')}
+                />
+                <ForceGraph
+                  ref={graphRef}
+                  data={graph}
+                  styleId={graphStyle}
+                  layoutId={graphLayout}
+                  selectedId={selected?.id || null}
+                  onSelect={setSelected}
+                  matchIds={matchIds}
+                  minimap={showMinimap}
+                />
+                <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+                  Object graph · click a node to read its value and history
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {selected && selected.kind === 'i3x-object' && (
           <ObjectPanel node={selected} onClose={() => setSelected(null)} />

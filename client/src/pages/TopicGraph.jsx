@@ -103,9 +103,10 @@ export default function TopicGraph() {
     [brokerId, topicVersion]
   );
 
+  const GRAPH_MAX_NODES = 2500;
   const fullGraph = useMemo(() => {
     if (!broker) return { nodes: [], links: [] };
-    return buildMqttGraph(broker, brokerTopics);
+    return buildMqttGraph(broker, brokerTopics, { maxNodes: GRAPH_MAX_NODES });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [broker?.id, brokerTopics]);
 
@@ -255,6 +256,11 @@ export default function TopicGraph() {
               matchIds={matchIds}
               minimap={showMinimap}
             />
+            {graph.capped && (
+              <div className="pointer-events-none absolute right-4 top-16 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200 backdrop-blur">
+                Large topic set — graph capped to {GRAPH_MAX_NODES.toLocaleString()} nodes ("+N" badges aggregate the rest). Switch to Tree for all {brokerTopics.length.toLocaleString()} topics.
+              </div>
+            )}
             <div className="pointer-events-none absolute bottom-4 left-4 flex flex-col gap-2">
               <div className="pointer-events-auto">
                 <ReplayScrubber messages={liveMsgs} toNodeId={replayNodeId} graphRef={graphRef} />

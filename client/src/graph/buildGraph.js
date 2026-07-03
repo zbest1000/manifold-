@@ -21,9 +21,10 @@ const MESSAGE_TYPE_GROUP = {
  * Each topic "a/b/c" contributes nodes a, a/b, a/b/c linked parent→child, all
  * rooted at the broker node.
  */
-export function buildMqttGraph(broker, topics) {
+export function buildMqttGraph(broker, topics, { maxNodes = Infinity } = {}) {
   const nodes = new Map();
   const links = [];
+  let capped = false;
 
   const rootId = `broker:${broker.id}`;
   nodes.set(rootId, {
@@ -40,12 +41,22 @@ export function buildMqttGraph(broker, topics) {
     let parentId = rootId;
     let pathAcc = '';
 
-    segments.forEach((seg, idx) => {
+    for (let idx = 0; idx < segments.length; idx++) {
+      const seg = segments[idx];
       pathAcc = idx === 0 ? seg : `${pathAcc}/${seg}`;
       const id = `topic:${broker.id}:${pathAcc}`;
       const isLeaf = idx === segments.length - 1;
 
       if (!nodes.has(id)) {
+        // At the node budget: don't add more nodes — roll this (and the rest of
+        // the topic) up into a "+N" badge on the nearest kept ancestor so the
+        // graph stays renderable at massive scale. The Tree view shows them all.
+        if (nodes.size >= maxNodes) {
+          const parent = nodes.get(parentId);
+          if (parent) parent.collapsedCount = (parent.collapsedCount || 0) + 1;
+          capped = true;
+          break;
+        }
         nodes.set(id, {
           id,
           label: seg,
@@ -63,7 +74,6 @@ export function buildMqttGraph(broker, topics) {
         });
         links.push({ source: parentId, target: id });
       } else if (isLeaf) {
-        // Existing intermediate node is now also a leaf — refresh its metadata
         const node = nodes.get(id);
         node.group = MESSAGE_TYPE_GROUP[t.type] || 'data';
         node.meta.isLeaf = true;
@@ -72,11 +82,11 @@ export function buildMqttGraph(broker, topics) {
         node.meta.type = t.type;
       }
       parentId = id;
-    });
+    }
   }
 
   computeDegree(nodes, links);
-  return { nodes: Array.from(nodes.values()), links };
+  return { nodes: Array.from(nodes.values()), links, capped };
 }
 
 /**

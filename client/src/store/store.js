@@ -216,6 +216,12 @@ export function initRealtime() {
   socket.on('discovery-error', () => s.setDiscovery({ scanning: false }));
 }
 
+// Dev-only: expose the store for scale/perf testing harnesses to seed the topic
+// index directly (the render path is identical to live ingestion).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  window.__tcStore = useStore;
+}
+
 async function refreshOpcua() {
   try {
     const res = await fetch('/api/opcua/connections');

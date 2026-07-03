@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Plus, X, Activity, Eye } from 'lucide-react';
+import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2 } from 'lucide-react';
+import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
@@ -8,10 +9,26 @@ import ForceGraph from '@/graph/ForceGraph';
 import { buildOpcuaGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
+import GraphTree from '@/components/GraphTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
 import { Card, Button, Badge, Input, Field, EmptyState } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
+
+function ViewTab({ active, onClick, icon: Icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
+        active ? 'bg-accent-500/20 text-accent-200' : 'bg-surface-950/60 text-slate-400 hover:text-slate-200'
+      )}
+    >
+      <Icon size={14} />
+      {label}
+    </button>
+  );
+}
 
 const ROOT = 'ns=0;i=84';
 
@@ -31,6 +48,8 @@ export default function OpcUa() {
   const [form, setForm] = useState({ name: '', endpointUrl: 'opc.tcp://localhost:4840' });
   const [busy, setBusy] = useState(false);
   const [matchIds, setMatchIds] = useState(null);
+  const [view, setView] = useState('graph');
+  const [treeFilter, setTreeFilter] = useState('');
   const graphRef = useRef(null);
 
   const connected = opcua.filter((c) => c.status === 'connected');
@@ -137,6 +156,12 @@ export default function OpcUa() {
         subtitle={connection ? `${graph.nodes.length} nodes · double-click to expand` : 'Connect an endpoint'}
         actions={
           <div className="flex items-center gap-2">
+            {connection && (
+              <div className="flex overflow-hidden rounded-xl border border-white/10">
+                <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
+                <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
+              </div>
+            )}
             {connected.length > 0 && (
               <select
                 value={connectionId || ''}
@@ -181,29 +206,52 @@ export default function OpcUa() {
       <div className="relative flex flex-1 overflow-hidden">
         <div className="relative flex-1">
           {connection ? (
-            <>
-              <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
-              <GraphToolbar
-                onFit={() => graphRef.current?.fitTo()}
-                onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), `opcua-graph-${connectionId}.png`)}
-                onExportJson={() => downloadJson(graphRef.current?.exportGraph(), `opcua-graph-${connectionId}.json`)}
-              />
-              <ForceGraph
-                ref={graphRef}
-                data={graph}
-                styleId={graphStyle}
-                layoutId={graphLayout}
-                selectedId={selected?.id || null}
-                onSelect={setSelected}
-                onExpand={expandNode}
-                nodeValues={showValues ? nodeValues : null}
-                matchIds={matchIds}
-                minimap={showMinimap}
-              />
-              <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
-                Double-click a node to browse its children · click to inspect
+            view === 'tree' ? (
+              <div className="flex h-full w-full max-w-md flex-col border-r border-white/5 bg-surface-900/30">
+                <div className="flex items-center gap-1.5 border-b border-white/5 px-3 py-2">
+                  <Search size={14} className="text-slate-500" />
+                  <input
+                    value={treeFilter}
+                    onChange={(e) => setTreeFilter(e.target.value)}
+                    placeholder="Filter nodes…"
+                    className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none"
+                  />
+                </div>
+                <GraphTree
+                  nodes={graph.nodes}
+                  links={graph.links}
+                  selectedId={selected?.id || null}
+                  onSelect={setSelected}
+                  onExpandNode={expandNode}
+                  valueMap={showValues ? nodeValues : null}
+                  filter={treeFilter}
+                />
               </div>
-            </>
+            ) : (
+              <>
+                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+                <GraphToolbar
+                  onFit={() => graphRef.current?.fitTo()}
+                  onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), `opcua-graph-${connectionId}.png`)}
+                  onExportJson={() => downloadJson(graphRef.current?.exportGraph(), `opcua-graph-${connectionId}.json`)}
+                />
+                <ForceGraph
+                  ref={graphRef}
+                  data={graph}
+                  styleId={graphStyle}
+                  layoutId={graphLayout}
+                  selectedId={selected?.id || null}
+                  onSelect={setSelected}
+                  onExpand={expandNode}
+                  nodeValues={showValues ? nodeValues : null}
+                  matchIds={matchIds}
+                  minimap={showMinimap}
+                />
+                <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+                  Double-click a node to browse its children · click to inspect
+                </div>
+              </>
+            )
           ) : (
             <EmptyState icon={Cpu} title="No connected server selected" hint="Connect an endpoint above." />
           )}
