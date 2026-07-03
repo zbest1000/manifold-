@@ -4,6 +4,24 @@ import { DEFAULT_STYLE, DEFAULT_LAYOUT } from '@/graph/graphStyles';
 
 const MAX_LIVE_MESSAGES = 200;
 
+// Lightweight message-activity bus. The graph's live-flow animation subscribes
+// here instead of through React state, so a busy broker doesn't trigger a render
+// per message — it just drives the canvas animation loop directly.
+const activityListeners = new Set();
+export function onMessageActivity(cb) {
+  activityListeners.add(cb);
+  return () => activityListeners.delete(cb);
+}
+function emitActivity(msg) {
+  for (const cb of activityListeners) {
+    try {
+      cb(msg);
+    } catch {
+      // a bad listener must not break message ingestion
+    }
+  }
+}
+
 export const useStore = create((set, get) => ({
   connected: false,
   brokers: [], // MQTT connections
@@ -20,6 +38,7 @@ export const useStore = create((set, get) => ({
   // Graph view preferences (persisted to localStorage)
   graphStyle: localStorage.getItem('tc.graphStyle') || DEFAULT_STYLE,
   graphLayout: localStorage.getItem('tc.graphLayout') || DEFAULT_LAYOUT,
+  flowEnabled: localStorage.getItem('tc.flowEnabled') !== 'false',
 
   setGraphStyle: (id) => {
     localStorage.setItem('tc.graphStyle', id);
@@ -28,6 +47,10 @@ export const useStore = create((set, get) => ({
   setGraphLayout: (id) => {
     localStorage.setItem('tc.graphLayout', id);
     set({ graphLayout: id });
+  },
+  setFlowEnabled: (v) => {
+    localStorage.setItem('tc.flowEnabled', String(v));
+    set({ flowEnabled: v });
   },
 
   setConnected: (connected) => set({ connected }),
@@ -52,7 +75,8 @@ export const useStore = create((set, get) => ({
 
   setTopics: (brokerId, topics) => set((s) => ({ topics: { ...s.topics, [brokerId]: topics } })),
 
-  ingestMessage: (msg) =>
+  ingestMessage: (msg) => {
+    emitActivity(msg);
     set((s) => {
       const buf = s.liveMessages[msg.brokerId] || [];
       const next = [msg, ...buf].slice(0, MAX_LIVE_MESSAGES);
@@ -72,7 +96,8 @@ export const useStore = create((set, get) => ({
         liveMessages: { ...s.liveMessages, [msg.brokerId]: next },
         topics: { ...s.topics, [msg.brokerId]: topics }
       };
-    }),
+    });
+  },
 
   setOpcuaValue: (connectionId, nodeId, value) =>
     set((s) => ({

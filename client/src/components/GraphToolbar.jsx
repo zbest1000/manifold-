@@ -1,26 +1,49 @@
 import { useState } from 'react';
-import { Palette, Shuffle, Check, ChevronDown } from 'lucide-react';
+import { Palette, Shuffle, Check, ChevronDown, Activity } from 'lucide-react';
 import clsx from 'clsx';
 import { STYLE_LIST, LAYOUT_LIST } from '@/graph/graphStyles';
 import { useStore } from '@/store/store';
 
-/** Floating toolbar for choosing the node-graph visual style and layout. */
-export default function GraphToolbar() {
-  const { graphStyle, graphLayout, setGraphStyle, setGraphLayout } = useStore();
+/**
+ * Floating toolbar for the node graph: toggle live message-flow animation and
+ * choose the visual style + layout.
+ *
+ * `showFlow` gates the flow toggle so views without a live message stream
+ * (e.g. OPC UA / i3X) don't show a control that would do nothing.
+ */
+export default function GraphToolbar({ showFlow = false }) {
+  const { graphStyle, graphLayout, setGraphStyle, setGraphLayout, flowEnabled, setFlowEnabled } = useStore();
   const [open, setOpen] = useState(false);
 
   const active = STYLE_LIST.find((s) => s.id === graphStyle) || STYLE_LIST[0];
 
   return (
     <div className="pointer-events-auto absolute right-4 top-4 z-10 flex flex-col items-end gap-2">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-xl border border-white/10 bg-surface-900/80 px-3 py-2 text-sm text-slate-200 backdrop-blur transition hover:border-white/20 hover:bg-surface-900"
-      >
-        <Palette size={16} className="text-accent-400" />
-        <span className="font-medium">{active.name}</span>
-        <ChevronDown size={14} className={clsx('transition', open && 'rotate-180')} />
-      </button>
+      <div className="flex items-center gap-2">
+        {showFlow && (
+          <button
+            onClick={() => setFlowEnabled(!flowEnabled)}
+            title={flowEnabled ? 'Live message flow: on' : 'Live message flow: off'}
+            className={clsx(
+              'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm backdrop-blur transition',
+              flowEnabled
+                ? 'border-accent-500/60 bg-accent-500/15 text-accent-200'
+                : 'border-white/10 bg-surface-900/80 text-slate-400 hover:border-white/20'
+            )}
+          >
+            <Activity size={16} className={clsx(flowEnabled && 'animate-pulse')} />
+            <span className="font-medium">Flow</span>
+          </button>
+        )}
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-2 rounded-xl border border-white/10 bg-surface-900/80 px-3 py-2 text-sm text-slate-200 backdrop-blur transition hover:border-white/20 hover:bg-surface-900"
+        >
+          <Palette size={16} className="text-accent-400" />
+          <span className="font-medium">{active.name}</span>
+          <ChevronDown size={14} className={clsx('transition', open && 'rotate-180')} />
+        </button>
+      </div>
 
       {open && (
         <div className="w-72 rounded-2xl border border-white/10 bg-surface-900/95 p-3 shadow-2xl backdrop-blur">

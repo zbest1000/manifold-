@@ -24,6 +24,10 @@ MCP-capable client at the included MCP server.
 - **Node-graph visualization** — a smooth canvas force graph with pan/zoom, drag,
   hover-highlight and selection. Nodes scale by connectivity; branches and leaves
   are colored by message/node type.
+- **Live message flow** — with a broker connected, incoming messages animate as
+  dots travelling from the broker out to their topic node, active nodes pulse, and
+  busy topics glow brighter — so you can *see* what your network is doing. Toggle
+  it from the graph toolbar (persists across sessions).
 - **Selectable visual styles** — pick from six hand-tuned graph themes
   (Constellation, Blueprint, Aurora, Neon, Circuit, Slate) plus three layout
   presets (Organic, Spacious, Tight). Your choice persists across sessions.

@@ -27,7 +27,9 @@ export default function ForceGraph({
   layoutId = 'organic',
   selectedId = null,
   onSelect,
-  onExpand
+  onExpand,
+  flow = false,
+  activitySource = null
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
@@ -38,6 +40,16 @@ export default function ForceGraph({
   const linksRef = useRef([]);
   const dprRef = useRef(1);
   const centeredRef = useRef(false);
+
+  // Live message-flow animation state (all imperative, off the React tree)
+  const nodeByIdRef = useRef(new Map());
+  const parentOfRef = useRef(new Map()); // childId -> parentId, for root→leaf paths
+  const particlesRef = useRef([]); // travelling dots: { nodeIds, progress, speed }
+  const pulseRef = useRef(new Map()); // nodeId -> ring strength (0..1)
+  const rateRef = useRef(new Map()); // nodeId -> recent activity (drives glow)
+  const rafRef = useRef(0);
+  const lastFrameRef = useRef(0);
+  const drawRef = useRef(() => {});
 
   const style = GRAPH_STYLES[styleId] || GRAPH_STYLES.constellation;
   const layout = LAYOUTS[layoutId] || LAYOUTS.organic;
@@ -111,9 +123,14 @@ export default function ForceGraph({
 
       ctx.globalAlpha = dim ? 0.35 : 1;
 
-      if (style.node.glow) {
+      // Recent message activity brightens a node's glow without touching its
+      // physical radius (which would disturb collision/layout).
+      const activity = rateRef.current.get(n.id) || 0;
+      const activeGlow = Math.min(activity, 4) * 6;
+      const glow = (style.node.glow || 0) + activeGlow;
+      if (glow > 0) {
         ctx.shadowColor = color;
-        ctx.shadowBlur = style.node.glow;
+        ctx.shadowBlur = glow;
       } else {
         ctx.shadowBlur = 0;
       }
@@ -158,8 +175,142 @@ export default function ForceGraph({
       }
     }
 
+    // Live-flow overlay: expanding pulse rings on active nodes + travelling dots.
+    const byId = nodeByIdRef.current;
+    if (pulseRef.current.size) {
+      ctx.strokeStyle = style.linkHighlight;
+      for (const [id, s] of pulseRef.current) {
+        const n = byId.get(id);
+        if (!n) continue;
+        const r = nodeRadius(n, style);
+        ctx.globalAlpha = s * 0.85;
+        ctx.lineWidth = 2 / t.k;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 3 + (1 - s) * 16, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (particlesRef.current.length) {
+      ctx.fillStyle = style.linkHighlight;
+      ctx.shadowColor = style.linkHighlight;
+      ctx.shadowBlur = 8;
+      const dot = 3.5 / t.k;
+      for (const p of particlesRef.current) {
+        const pos = particlePosition(p, byId);
+        if (!pos) continue;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, dot, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+
     ctx.restore();
   }, [style, selectedId]);
+
+  // Keep the animation loop pointed at the latest draw (recreated on restyle).
+  useEffect(() => {
+    drawRef.current = draw;
+  }, [draw]);
+
+  // Register a burst of activity on a node: pulse the node, send a dot along the
+  // path from the root down to it, and bump its glow. Drives the animation loop.
+  const pulse = useCallback(
+    (nodeId) => {
+      const byId = nodeByIdRef.current;
+      if (!byId.has(nodeId)) return;
+
+      // Walk parent pointers up to the root to get the root→node path
+      const path = [nodeId];
+      let cur = nodeId;
+      const guard = new Set([nodeId]);
+      while (parentOfRef.current.has(cur)) {
+        const parent = parentOfRef.current.get(cur);
+        if (guard.has(parent)) break;
+        path.push(parent);
+        guard.add(parent);
+        cur = parent;
+      }
+      path.reverse(); // root ... leaf
+
+      pulseRef.current.set(nodeId, 1);
+      rateRef.current.set(nodeId, (rateRef.current.get(nodeId) || 0) + 1);
+
+      if (path.length >= 2) {
+        const dur = 450 + (path.length - 1) * 130; // ms, longer paths take longer
+        particlesRef.current.push({ nodeIds: path, progress: 0, speed: 1 / dur });
+        if (particlesRef.current.length > 200) particlesRef.current.shift();
+      }
+      startAnimation();
+    },
+    // startAnimation is stable (defined below via ref-free closure)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const startAnimation = useCallback(() => {
+    if (rafRef.current) return;
+    lastFrameRef.current = 0;
+    const step = (ts) => {
+      const dt = lastFrameRef.current ? Math.min(ts - lastFrameRef.current, 50) : 16;
+      lastFrameRef.current = ts;
+
+      // Advance travelling dots
+      const particles = particlesRef.current;
+      for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].progress += dt * particles[i].speed;
+        if (particles[i].progress >= 1) particles.splice(i, 1);
+      }
+      // Decay pulse rings
+      const pulseDecay = Math.pow(0.9, dt / 16);
+      for (const [id, s] of pulseRef.current) {
+        const next = s * pulseDecay;
+        if (next < 0.04) pulseRef.current.delete(id);
+        else pulseRef.current.set(id, next);
+      }
+      // Decay activity glow (slower)
+      const rateDecay = Math.pow(0.985, dt / 16);
+      for (const [id, v] of rateRef.current) {
+        const next = v * rateDecay;
+        if (next < 0.05) rateRef.current.delete(id);
+        else rateRef.current.set(id, next);
+      }
+
+      drawRef.current();
+
+      if (particles.length || pulseRef.current.size || rateRef.current.size) {
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        rafRef.current = 0;
+        lastFrameRef.current = 0;
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+  }, []);
+
+  // Subscribe to the activity bus while live flow is enabled.
+  useEffect(() => {
+    if (!flow || !activitySource) return undefined;
+    const unsub = activitySource(pulse);
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, [flow, activitySource, pulse]);
+
+  // Stop the animation loop and clear transient state when flow is turned off.
+  useEffect(() => {
+    if (flow) return;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+    particlesRef.current = [];
+    pulseRef.current.clear();
+    rateRef.current.clear();
+    draw();
+  }, [flow, draw]);
+
+  // Cancel any pending frame on unmount.
+  useEffect(() => () => rafRef.current && cancelAnimationFrame(rafRef.current), []);
 
   // Build / rebuild the simulation when the graph data or layout changes.
   useEffect(() => {
@@ -176,6 +327,13 @@ export default function ForceGraph({
     const links = data.links
       .filter((l) => nodeById.has(l.source) && nodeById.has(l.target))
       .map((l) => ({ source: l.source, target: l.target }));
+
+    // Live-flow lookups: id→node and child→parent (edges run parent→child).
+    // Built from the string ids before forceLink() mutates them into objects.
+    const parentOf = new Map();
+    for (const l of links) parentOf.set(l.target, l.source);
+    nodeByIdRef.current = nodeById;
+    parentOfRef.current = parentOf;
 
     nodesRef.current = nodes;
     linksRef.current = links;
@@ -343,4 +501,17 @@ function nodeRadius(n, style) {
   const scaled = base + Math.sqrt(n.degree || 0) * 3;
   if (n.kind === 'broker' || n.kind === 'opcua-server') return style.nodeMaxRadius;
   return Math.min(scaled, style.nodeMaxRadius);
+}
+
+// Interpolate a travelling dot's position along its root→leaf node path.
+function particlePosition(p, byId) {
+  const segments = p.nodeIds.length - 1;
+  if (segments < 1) return null;
+  const f = Math.max(0, Math.min(p.progress, 1)) * segments;
+  const i = Math.min(Math.floor(f), segments - 1);
+  const local = f - i;
+  const a = byId.get(p.nodeIds[i]);
+  const b = byId.get(p.nodeIds[i + 1]);
+  if (!a || !b) return null;
+  return { x: a.x + (b.x - a.x) * local, y: a.y + (b.y - a.y) * local };
 }

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Share2, X, Gauge, Clock, Hash, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useStore } from '@/store/store';
+import { useStore, onMessageActivity } from '@/store/store';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 import { buildMqttGraph } from '@/graph/buildGraph';
@@ -18,6 +18,7 @@ export default function TopicGraph() {
   const liveMessages = useStore((s) => s.liveMessages);
   const graphStyle = useStore((s) => s.graphStyle);
   const graphLayout = useStore((s) => s.graphLayout);
+  const flowEnabled = useStore((s) => s.flowEnabled);
   const setTopics = useStore((s) => s.setTopics);
 
   const [brokerId, setBrokerId] = useState(null);
@@ -43,10 +44,26 @@ export default function TopicGraph() {
   const broker = brokers.find((b) => b.id === brokerId);
   const brokerTopics = topics[brokerId] || [];
 
+  // Rebuild the graph only when the topic *set* changes — not on every message.
+  // Message counts/timestamps update constantly; keying the memo on them would
+  // reheat the force simulation on each message and make the layout jitter.
+  const topicKey = brokerTopics.map((t) => t.topic).sort().join('\n');
   const graph = useMemo(() => {
     if (!broker) return { nodes: [], links: [] };
     return buildMqttGraph(broker, brokerTopics);
-  }, [broker, brokerTopics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broker?.id, topicKey]);
+
+  // Feed live message activity to the graph's flow animation. Maps an incoming
+  // message on this broker to its leaf node id (see buildMqttGraph node ids).
+  const activitySource = useCallback(
+    (pulse) =>
+      onMessageActivity((msg) => {
+        if (msg.brokerId !== brokerId) return;
+        pulse(`topic:${brokerId}:${msg.topic}`);
+      }),
+    [brokerId]
+  );
 
   if (connected.length === 0) {
     return (
@@ -91,16 +108,18 @@ export default function TopicGraph() {
 
       <div className="relative flex flex-1 overflow-hidden">
         <div className="relative flex-1">
-          <GraphToolbar />
+          <GraphToolbar showFlow />
           <ForceGraph
             data={graph}
             styleId={graphStyle}
             layoutId={graphLayout}
             selectedId={selected?.id || null}
             onSelect={setSelected}
+            flow={flowEnabled}
+            activitySource={activitySource}
           />
           <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
-            Drag to move nodes · scroll to zoom · click a node for details
+            Drag to move nodes · scroll to zoom · click a node for details · messages animate live
           </div>
         </div>
 
