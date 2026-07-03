@@ -199,7 +199,12 @@ export function initRealtime() {
   socket.on('mqtt-reconnecting', ({ brokerId }) => s.upsertBroker({ id: brokerId, status: 'reconnecting' }));
   socket.on('mqtt-error', ({ brokerId }) => brokerId && s.upsertBroker({ id: brokerId, status: 'error' }));
   socket.on('mqtt-disconnected', ({ brokerId }) => s.removeBroker(brokerId));
-  socket.on('mqtt-message', (msg) => s.ingestMessage(msg));
+  // The server batches forwarded messages so a huge broker's initial retained
+  // burst arrives as arrays rather than millions of individual events.
+  socket.on('mqtt-messages', (batch) => {
+    if (Array.isArray(batch)) for (const msg of batch) s.ingestMessage(msg);
+  });
+  socket.on('mqtt-message', (msg) => s.ingestMessage(msg)); // backward compat
   socket.on('broker-stats', (stats) => {
     for (const st of stats) s.upsertBroker({ id: st.brokerId, status: st.status, metrics: st.metrics });
   });

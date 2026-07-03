@@ -39,13 +39,17 @@ router.delete('/brokers/:brokerId', (req, res) => {
   }
 });
 
-// GET /api/mqtt/brokers/:brokerId/topics
+// GET /api/mqtt/brokers/:brokerId/topics?limit=100000
+// Bounded so a broker with millions of topics can't produce an unbounded
+// response; the live stream keeps filling the client's index beyond the limit.
 router.get('/brokers/:brokerId/topics', (req, res) => {
   const { mqttManager } = req.app.locals.services;
   if (!mqttManager.getConnection(req.params.brokerId)) {
     return res.status(404).json({ error: 'Broker not found' });
   }
-  res.json({ topics: mqttManager.getTopics(req.params.brokerId) });
+  const limit = Math.min(Number(req.query.limit) || 100000, 500000);
+  const { topics, total, dropped } = mqttManager.getTopics(req.params.brokerId, { limit });
+  res.json({ topics, total, dropped, truncated: total > topics.length });
 });
 
 // GET /api/mqtt/brokers/:brokerId/messages?topic=...&limit=50

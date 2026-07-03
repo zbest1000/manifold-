@@ -3,9 +3,18 @@ const { EventEmitter } = require('events');
 const { v4: uuidv4 } = require('uuid');
 const SparkplugDecoder = require('./sparkplugDecoder');
 
-const MAX_MESSAGES_PER_TOPIC = 500;
 const STATS_INTERVAL_MS = 2000;
 const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Memory-safe model for brokers with up to millions of topics: keep only a
+// latest-value record per topic (O(topics), small constant) plus a bounded
+// global ring of recent messages for the detail view — never an unbounded
+// history per topic. Socket forwarding is batched so the initial retained
+// burst of a huge broker doesn't emit millions of individual events.
+const MAX_TOPICS = 2_000_000; // per-broker topic cap (guards server memory)
+const GLOBAL_RECENT = 5000; // recent messages kept across all topics, per broker
+const EMIT_BATCH_MS = 100; // flush forwarded messages on this cadence
+const EMIT_BATCH_MAX = 2000; // …or early once this many are pending
 
 class MqttManager extends EventEmitter {
   constructor(io) {
@@ -13,7 +22,10 @@ class MqttManager extends EventEmitter {
     this.io = io;
     this.connections = new Map(); // brokerId -> connection info
     this.clients = new Map(); // brokerId -> mqtt client
-    this.topicData = new Map(); // brokerId -> Map(topic -> messages[])
+    this.topicData = new Map(); // brokerId -> Map(topic -> latest-value record)
+    this.recent = new Map(); // brokerId -> recent message ring (bounded)
+    this.pending = new Map(); // brokerId -> messages awaiting a batched emit
+    this.dropped = new Map(); // brokerId -> count of topics dropped at the cap
     this.subscriptions = new Map(); // brokerId -> Set(topic filters)
     this.sparkplugDecoder = new SparkplugDecoder();
 
@@ -21,8 +33,10 @@ class MqttManager extends EventEmitter {
     // (the HTTP server holds the event loop open in normal operation)
     this.cleanupTimer = setInterval(() => this.cleanupOldMessages(), 300000);
     this.statsTimer = setInterval(() => this.emitStats(), STATS_INTERVAL_MS);
+    this.batchTimer = setInterval(() => this.flushBatches(), EMIT_BATCH_MS);
     this.cleanupTimer.unref?.();
     this.statsTimer.unref?.();
+    this.batchTimer.unref?.();
   }
 
   connectToBroker(config = {}) {
@@ -87,6 +101,9 @@ class MqttManager extends EventEmitter {
     this.connections.set(brokerId, info);
     this.clients.set(brokerId, client);
     this.topicData.set(brokerId, new Map());
+    this.recent.set(brokerId, []);
+    this.pending.set(brokerId, []);
+    this.dropped.set(brokerId, 0);
     this.subscriptions.set(brokerId, new Set());
     this.setupClientEventHandlers(client, brokerId);
 
@@ -178,17 +195,52 @@ class MqttManager extends EventEmitter {
       }
     }
 
-    if (!topicMap.has(topic)) {
-      topicMap.set(topic, []);
-      info.metrics.topicCount = topicMap.size;
+    // Latest-value record per topic (O(1), bounded memory even at millions of
+    // topics). New topics past the cap are still forwarded to clients but not
+    // retained server-side, so memory can't grow without bound.
+    let record = topicMap.get(topic);
+    if (!record) {
+      if (topicMap.size >= MAX_TOPICS) {
+        this.dropped.set(brokerId, (this.dropped.get(brokerId) || 0) + 1);
+      } else {
+        record = { topic, messageCount: 0, firstSeen: messageObj.timestamp };
+        topicMap.set(topic, record);
+        info.metrics.topicCount = topicMap.size;
+      }
     }
-    const topicMessages = topicMap.get(topic);
-    topicMessages.push(messageObj);
-    if (topicMessages.length > MAX_MESSAGES_PER_TOPIC) {
-      topicMessages.splice(0, topicMessages.length - MAX_MESSAGES_PER_TOPIC);
+    if (record) {
+      record.messageCount++;
+      record.lastActivity = messageObj.timestamp;
+      record.type = messageObj.type;
+      record.retain = messageObj.retain;
+      record.payloadFormat = messageObj.payloadFormat;
+      record.latest = messageObj;
     }
 
-    this.io.emit('mqtt-message', messageObj);
+    // Bounded global ring for the detail view's recent history.
+    const ring = this.recent.get(brokerId);
+    if (ring) {
+      ring.push(messageObj);
+      if (ring.length > GLOBAL_RECENT) ring.splice(0, ring.length - GLOBAL_RECENT);
+    }
+
+    // Queue for a batched socket emit (flush on cadence or when large).
+    const pending = this.pending.get(brokerId);
+    if (pending) {
+      pending.push(messageObj);
+      if (pending.length >= EMIT_BATCH_MAX) this.flushBroker(brokerId);
+    }
+  }
+
+  flushBroker(brokerId) {
+    const pending = this.pending.get(brokerId);
+    if (!pending || pending.length === 0) return;
+    const batch = pending.splice(0, pending.length);
+    this.io.emit('mqtt-messages', batch);
+  }
+
+  flushBatches() {
+    for (const brokerId of this.pending.keys()) this.flushBroker(brokerId);
   }
 
   subscribe(brokerId, topic, qos = 0) {
@@ -250,6 +302,9 @@ class MqttManager extends EventEmitter {
     }
     this.connections.delete(brokerId);
     this.topicData.delete(brokerId);
+    this.recent.delete(brokerId);
+    this.pending.delete(brokerId);
+    this.dropped.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
     return { brokerId, status: 'disconnected' };
@@ -284,18 +339,23 @@ class MqttManager extends EventEmitter {
     if (this.connections.size === 0) return;
     const stats = [];
     this.connections.forEach((info, brokerId) => {
-      stats.push({ brokerId, status: info.status, metrics: { ...info.metrics }, lastActivity: info.lastActivity });
+      stats.push({
+        brokerId,
+        status: info.status,
+        metrics: { ...info.metrics, droppedTopics: this.dropped.get(brokerId) || 0 },
+        lastActivity: info.lastActivity
+      });
     });
     this.io.emit('broker-stats', stats);
   }
 
   cleanupOldMessages() {
     const cutoff = Date.now() - MESSAGE_TTL_MS;
-    this.topicData.forEach((topicMap) => {
-      topicMap.forEach((messages, topic) => {
-        const kept = messages.filter((msg) => new Date(msg.timestamp).getTime() > cutoff);
-        topicMap.set(topic, kept);
-      });
+    this.recent.forEach((ring, brokerId) => {
+      this.recent.set(
+        brokerId,
+        ring.filter((msg) => new Date(msg.timestamp).getTime() > cutoff)
+      );
     });
   }
 
@@ -317,37 +377,51 @@ class MqttManager extends EventEmitter {
     return Array.from(this.subscriptions.get(brokerId) || []);
   }
 
-  getTopics(brokerId) {
+  getTopics(brokerId, { limit = Infinity } = {}) {
     const topicMap = this.topicData.get(brokerId);
-    if (!topicMap) return [];
+    if (!topicMap) return { topics: [], total: 0, dropped: 0 };
 
     const topics = [];
-    topicMap.forEach((messages, topic) => {
-      const last = messages[messages.length - 1];
+    for (const record of topicMap.values()) {
+      if (topics.length >= limit) break;
       topics.push({
-        topic,
-        messageCount: messages.length,
-        lastActivity: last?.timestamp || null,
-        lastPayloadFormat: last?.payloadFormat || null,
-        type: last?.type || 'unknown'
+        topic: record.topic,
+        messageCount: record.messageCount,
+        lastActivity: record.lastActivity || null,
+        lastPayloadFormat: record.payloadFormat || null,
+        type: record.type || 'unknown',
+        retain: record.retain || false,
+        payload: record.latest?.payload
       });
-    });
-    return topics;
+    }
+    return { topics, total: topicMap.size, dropped: this.dropped.get(brokerId) || 0 };
   }
 
   getMessages(brokerId, topic, limit = 50) {
-    const topicMap = this.topicData.get(brokerId);
-    if (!topicMap || !topicMap.has(topic)) return [];
-    return topicMap.get(topic).slice(-limit);
+    const ring = this.recent.get(brokerId) || [];
+    const matches = [];
+    // Walk newest→oldest so the most recent messages for the topic come first.
+    for (let i = ring.length - 1; i >= 0 && matches.length < limit; i--) {
+      if (ring[i].topic === topic) matches.push(ring[i]);
+    }
+    // Ensure the retained latest value is present even if it aged out of the ring.
+    const record = this.topicData.get(brokerId)?.get(topic);
+    if (record?.latest && !matches.some((m) => m.id === record.latest.id)) {
+      matches.push(record.latest);
+    }
+    return matches.reverse();
   }
 
   shutdown() {
     clearInterval(this.cleanupTimer);
     clearInterval(this.statsTimer);
+    clearInterval(this.batchTimer);
     this.clients.forEach((client) => client.end(true));
     this.clients.clear();
     this.connections.clear();
     this.topicData.clear();
+    this.recent.clear();
+    this.pending.clear();
   }
 }
 
