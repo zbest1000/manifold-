@@ -13,12 +13,13 @@ import { groupColor, PROTOCOL_COLORS } from './buildGraph';
  * The feature-rich 2D ForceGraph remains the default for normal-sized graphs
  * (labels, glow, curved links, live message-flow animation).
  */
-export default function WebGLGraph({ data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false, labelDensity = 0.5 }) {
+export default function WebGLGraph({ data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false, labelDensity = 0.5, positions = null }) {
   const canvasRef = useRef(null);
   const labelCanvasRef = useRef(null);
   const wrapRef = useRef(null);
   const glRef = useRef(null);
   const labelDensityRef = useRef(labelDensity);
+  const posRef = useRef(null);
   const progRef = useRef({});
   const buffersRef = useRef({});
   const countsRef = useRef({ nodes: 0, lineVerts: 0 });
@@ -158,6 +159,27 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
     [style]
   );
 
+  const fitAll = useCallback(() => {
+    const nodes = nodesRef.current;
+    if (!nodes.length) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of nodes) {
+      if (n.x < minX) minX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y > maxY) maxY = n.y;
+    }
+    const { w, h } = sizeRef.current;
+    if (!w) return;
+    const pad = 60;
+    const k = Math.min((w - pad) / Math.max(maxX - minX, 1), (h - pad) / Math.max(maxY - minY, 1));
+    transformRef.current = { k, x: w / 2 - (k * (minX + maxX)) / 2, y: h / 2 - (k * (minY + maxY)) / 2 };
+    draw();
+  }, [draw]);
+
   // Build GL programs + upload geometry when data changes.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -172,12 +194,23 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
       buffersRef.current = { pos: gl.createBuffer(), color: gl.createBuffer(), size: gl.createBuffer(), linePos: gl.createBuffer() };
     }
 
-    // Deterministic radial layout, then pack into typed arrays.
+    // Positions come from either the server-computed layout (organic sfdp/fcose,
+    // passed in via `positions`) or the built-in deterministic radial layout.
     const nodes = data.nodes.map((n) => ({ ...n }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const links = data.links.filter((l) => byId.has(l.source) && byId.has(l.target));
-    radialLayout(nodes, links);
+    if (positions) {
+      for (const n of nodes) {
+        const p = positions[n.id];
+        n.x = p ? p.x : 0;
+        n.y = p ? p.y : 0;
+      }
+    } else {
+      radialLayout(nodes, links);
+    }
     nodesRef.current = nodes;
+    const posChanged = positions !== posRef.current;
+    posRef.current = positions;
 
     const pos = new Float32Array(nodes.length * 2);
     const color = new Float32Array(nodes.length * 3);
@@ -215,8 +248,11 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
     countsRef.current = { nodes: nodes.length, lineVerts: links.length * 2 };
 
     buildGrid(nodes, gridRef);
+    // Re-frame when the layout itself changes (radial ⇄ server), but not on plain
+    // data updates (which would fight the user's pan/zoom).
+    if (posChanged) requestAnimationFrame(() => fitAll());
     draw();
-  }, [data, colorFor, draw]);
+  }, [data, colorFor, draw, positions, fitAll]);
 
   useEffect(() => {
     selectedRef.current = selectedId;
@@ -255,25 +291,6 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
         fitAll();
       }
       draw();
-    };
-
-    const fitAll = () => {
-      const nodes = nodesRef.current;
-      if (!nodes.length) return;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const n of nodes) {
-        if (n.x < minX) minX = n.x;
-        if (n.y < minY) minY = n.y;
-        if (n.x > maxX) maxX = n.x;
-        if (n.y > maxY) maxY = n.y;
-      }
-      const { w, h } = sizeRef.current;
-      const pad = 60;
-      const k = Math.min((w - pad) / Math.max(maxX - minX, 1), (h - pad) / Math.max(maxY - minY, 1));
-      transformRef.current = { k, x: w / 2 - k * (minX + maxX) / 2, y: h / 2 - k * (minY + maxY) / 2 };
     };
 
     resize();

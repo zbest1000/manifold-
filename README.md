@@ -52,7 +52,10 @@ MCP-capable client at the included MCP server.
   viewport-culled, zoom-aware **labels** and connection lines, with a
   **label-density slider** to dial how many labels show at once (from off to
   dense). The built-in renderer is leaner at the extreme; Sigma is offered as an
-  alternative for its camera feel.
+  alternative for its camera feel. A **Force layout** button computes an organic,
+  force-directed arrangement server-side (Graphviz `sfdp`, up to 30k nodes) and
+  renders it in the same view — the classic "network graph" look at scale, instead
+  of the deterministic radial default.
 - **Honest network discovery** — TCP port probing across a CIDR range, each hit
   verified with a real protocol handshake. No fabricated results.
 - **CESMII SMIP integration** — connect to a Smart Manufacturing Innovation Platform

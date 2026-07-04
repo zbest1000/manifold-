@@ -33,7 +33,7 @@ const NODE_CAP = {
   circo: 6000,
   neato: 4000,
   fdp: 4000,
-  sfdp: 20000,
+  sfdp: 30000,
   fcose: 15000
 };
 

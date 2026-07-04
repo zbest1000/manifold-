@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -64,6 +64,9 @@ export default function TopicGraph() {
   const [showAll, setShowAll] = useState(false);
   const [bigRenderer, setBigRenderer] = useState('webgl'); // 'webgl' | 'sigma'
   const [labelDensity, setLabelDensity] = useState(0.5); // 0 (off) .. 1 (dense)
+  const [forcePositions, setForcePositions] = useState(null); // server sfdp coords for show-all
+  const [forceBusy, setForceBusy] = useState(false);
+  const SFDP_MAX = 30000; // server-side sfdp node cap
   const graphRef = useRef(null);
 
   // Select a topic from the tree, shaping it like a graph node so the shared
@@ -126,6 +129,31 @@ export default function TopicGraph() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fullGraph, collapseKey]
   );
+
+  // A server-computed force layout is a snapshot for a specific node set — drop it
+  // when the graph changes (new topics, collapse) so stale coordinates aren't
+  // applied to different nodes; the view falls back to the radial layout.
+  useEffect(() => {
+    setForcePositions(null);
+  }, [graph]);
+
+  const runForceLayout = useCallback(async () => {
+    if (graph.nodes.length > SFDP_MAX) {
+      toast.error(`Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes (this has ${graph.nodes.length.toLocaleString()}).`);
+      return;
+    }
+    setForceBusy(true);
+    const t = toast.loading('Computing force layout…');
+    try {
+      const res = await api.computeLayout(graph, 'sfdp');
+      setForcePositions(res.positions);
+      toast.success(`Force layout: ${res.count.toLocaleString()} nodes`, { id: t });
+    } catch (err) {
+      toast.error(err.message || 'Layout failed', { id: t });
+    } finally {
+      setForceBusy(false);
+    }
+  }, [graph]);
 
   // Live buffer snapshot, refreshed at the throttled tick (not per message).
   const liveMsgs = useMemo(
@@ -277,10 +305,10 @@ export default function TopicGraph() {
               // and Sigma.js (mature large-graph library with zoom-aware labels).
               bigRenderer === 'sigma' ? (
                 <Suspense fallback={<div className="absolute inset-0 grid place-items-center text-xs text-slate-500">Loading Sigma renderer…</div>}>
-                  <SigmaGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} />
+                  <SigmaGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
                 </Suspense>
               ) : (
-                <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} />
+                <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
               )
             ) : (
               <ForceGraph
@@ -332,6 +360,28 @@ export default function TopicGraph() {
                       Sigma
                     </button>
                   </div>
+                )}
+                {showAll && (
+                  <button
+                    onClick={() => (forcePositions ? setForcePositions(null) : runForceLayout())}
+                    disabled={forceBusy || (!forcePositions && graph.nodes.length > SFDP_MAX)}
+                    title={
+                      graph.nodes.length > SFDP_MAX
+                        ? `Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes`
+                        : forcePositions
+                          ? 'Back to radial layout'
+                          : 'Organic force-directed layout (computed server-side)'
+                    }
+                    className={clsx(
+                      'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] backdrop-blur transition disabled:cursor-not-allowed disabled:opacity-40',
+                      forcePositions
+                        ? 'border-accent-500/60 bg-accent-500/15 text-accent-200'
+                        : 'border-white/10 bg-surface-900/80 text-slate-300 hover:border-white/25'
+                    )}
+                  >
+                    {forceBusy ? <Loader2 size={13} className="animate-spin" /> : <Waypoints size={13} />}
+                    {forcePositions ? 'Radial' : forceBusy ? 'Computing…' : 'Force layout'}
+                  </button>
                 )}
                 {showAll && (
                   <div

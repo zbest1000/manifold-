@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import WebGLGraph from '@/graph/WebGLGraph';
 import SigmaGraph from '@/graph/SigmaGraph';
 import { buildMqttGraph } from '@/graph/buildGraph';
+import { api } from '@/lib/api';
 
 /**
  * Internal benchmark / verification page (not linked in the nav). Renders a
@@ -20,7 +21,9 @@ export default function Bench() {
   const renderer = params.get('r') === 'sigma' ? 'sigma' : 'webgl';
   const density = params.has('d') ? Math.max(0, Math.min(1, Number(params.get('d')))) : 0.5;
   const skew = params.get('skew') === '1'; // irregular (realistic) topic tree vs uniform
+  const force = params.get('force') === '1'; // fetch server sfdp layout (needs backend)
   const [phase, setPhase] = useState('building');
+  const [positions, setPositions] = useState(null);
   const t0Ref = useRef(0);
 
   // Build a synthetic topic hierarchy with ~n leaf topics.
@@ -66,7 +69,25 @@ export default function Bench() {
     return { graph: g, buildMs: Math.round(performance.now() - t) };
   }, [n, skew]);
 
+  // Optionally fetch the server-computed sfdp layout (organic look at scale).
   useEffect(() => {
+    if (!force) return;
+    let cancelled = false;
+    api
+      .computeLayout(graph, 'sfdp')
+      .then((res) => !cancelled && setPositions(res.positions))
+      .catch(() => !cancelled && setPositions(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [graph, force]);
+
+  useEffect(() => {
+    // In force mode, wait for the server layout before declaring ready.
+    if (force && !positions) {
+      setPhase('laying out');
+      return undefined;
+    }
     t0Ref.current = performance.now();
     setPhase('rendering');
     // Two rAFs after mount ≈ the renderer has drawn at least one frame.
@@ -78,6 +99,7 @@ export default function Bench() {
         window.__bench = {
           ready: true,
           renderer,
+          layout: force ? 'sfdp' : 'radial',
           requested: n,
           nodes: graph.nodes.length,
           links: graph.links.length,
@@ -92,14 +114,14 @@ export default function Bench() {
       cancelAnimationFrame(raf2);
       delete window.__bench;
     };
-  }, [graph, renderer, n, buildMs]);
+  }, [graph, renderer, n, buildMs, force, positions]);
 
   return (
     <div className="relative h-screen w-screen bg-black">
       {renderer === 'sigma' ? (
-        <SigmaGraph data={graph} styleId="constellation" labelDensity={density} />
+        <SigmaGraph data={graph} styleId="constellation" labelDensity={density} positions={positions} />
       ) : (
-        <WebGLGraph data={graph} styleId="constellation" labelDensity={density} />
+        <WebGLGraph data={graph} styleId="constellation" labelDensity={density} positions={positions} />
       )}
       <div
         data-testid="bench-status"

@@ -14,7 +14,7 @@ import { groupColor, PROTOCOL_COLORS } from './buildGraph';
  *
  * Props mirror WebGLGraph so the two are drop-in interchangeable.
  */
-export default function SigmaGraph({ data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false, labelDensity = 0.5 }) {
+export default function SigmaGraph({ data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false, labelDensity = 0.5, positions = null }) {
   const wrapRef = useRef(null);
   const sigmaRef = useRef(null);
   const selectedRef = useRef(selectedId);
@@ -32,10 +32,14 @@ export default function SigmaGraph({ data, styleId = 'constellation', selectedId
       colorByProtocol && n.protocol ? PROTOCOL_COLORS[n.protocol] || style.palette[0] : groupColor(n.group, style.palette);
 
     const graph = new Graph({ multi: false, type: 'mixed' });
-    const positions = radialLayout(data.nodes, data.links);
+    // Server-computed coordinates (organic sfdp/fcose) when provided, else the
+    // built-in deterministic radial layout.
+    const layout = positions
+      ? new Map(data.nodes.map((n) => [n.id, positions[n.id] || { x: 0, y: 0 }]))
+      : radialLayout(data.nodes, data.links);
 
     for (const n of data.nodes) {
-      const p = positions.get(n.id) || { x: 0, y: 0 };
+      const p = layout.get(n.id) || { x: 0, y: 0 };
       const degree = n.degree || 0;
       graph.addNode(n.id, {
         x: p.x,
@@ -102,7 +106,7 @@ export default function SigmaGraph({ data, styleId = 'constellation', selectedId
       sigmaRef.current = null;
       if (typeof window !== 'undefined') delete window.__sigmaReady;
     };
-  }, [data, styleId, colorByProtocol]);
+  }, [data, styleId, colorByProtocol, positions]);
 
   // Re-render on selection change without rebuilding the graph.
   useEffect(() => {
