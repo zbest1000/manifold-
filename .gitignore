@@ -25,3 +25,6 @@ npm-debug.log*
 # OPC UA generated PKI (certificates created at runtime)
 server/certificates/
 server/PKI/
+
+# Persisted connection profiles (can contain credentials — never commit)
+server/data/

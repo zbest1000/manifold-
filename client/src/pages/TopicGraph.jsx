@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -8,19 +8,16 @@ import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 import ForceGraph3D from '@/graph/ForceGraph3D';
 import WebGLGraph from '@/graph/WebGLGraph';
-// Sigma pulls in its own WebGL runtime; only load it when a user opts into that
-// renderer so the default bundle stays lean.
-const SigmaGraph = lazy(() => import('@/graph/SigmaGraph'));
 import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
-import FlowsView from '@/components/FlowsView';
 import TopicTree from '@/components/TopicTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
 import { Card, Button, Badge, EmptyState, Input } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
+import ViewTab from '@/components/ViewTab';
 import { formatDistanceToNow } from 'date-fns';
 
 function numericFromPayload(payload) {
@@ -65,7 +62,6 @@ export default function TopicGraph() {
   const [view, setView] = useState('graph'); // 'graph' | 'tree'
   const [treeFilter, setTreeFilter] = useState('');
   const [showAll, setShowAll] = useState(false);
-  const [bigRenderer, setBigRenderer] = useState('webgl'); // 'webgl' | 'sigma'
   const [labelDensity, setLabelDensity] = useState(0.5); // 0 (off) .. 1 (dense)
   const [forcePositions, setForcePositions] = useState(null); // server sfdp coords for show-all
   const [forceBusy, setForceBusy] = useState(false);
@@ -249,7 +245,6 @@ export default function TopicGraph() {
               <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
               <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
-              <ViewTab active={view === 'flows'} onClick={() => setView('flows')} icon={Cpu} label="Flows" />
             </div>
             <select
               value={brokerId || ''}
@@ -270,9 +265,7 @@ export default function TopicGraph() {
       />
 
       <div className="relative flex flex-1 overflow-hidden">
-        {view === 'flows' ? (
-          <FlowsView broker={broker} />
-        ) : view === 'tree' ? (
+        {view === 'tree' ? (
           <div className="flex w-full max-w-md flex-col border-r border-white/5 bg-surface-900/30">
             <div className="flex items-center gap-1.5 border-b border-white/5 px-3 py-2">
               <Search size={14} className="text-slate-500" />
@@ -312,16 +305,9 @@ export default function TopicGraph() {
               </>
             )}
             {showAll ? (
-              // GPU renderer for the "show everything" view. Two interchangeable
-              // WebGL renderers: the built-in one (custom, one draw call per frame)
-              // and Sigma.js (mature large-graph library with zoom-aware labels).
-              bigRenderer === 'sigma' ? (
-                <Suspense fallback={<div className="absolute inset-0 grid place-items-center text-xs text-slate-500">Loading Sigma renderer…</div>}>
-                  <SigmaGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
-                </Suspense>
-              ) : (
-                <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
-              )
+              // GPU renderer for the "show everything" view — one draw call per
+              // frame plus a viewport-culled label overlay stays smooth at 60k+.
+              <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
             ) : (
               <ForceGraph
                 ref={graphRef}
@@ -369,16 +355,6 @@ export default function TopicGraph() {
                 {/* One unified control cluster for the big-graph view */}
                 {showAll && (
                   <div className="flex items-stretch divide-x divide-white/10 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-[11px] backdrop-blur">
-                    <Segment>
-                      <SegLabel>Renderer</SegLabel>
-                      <SegBtn active={bigRenderer === 'webgl'} onClick={() => setBigRenderer('webgl')} title="Built-in WebGL renderer">
-                        WebGL
-                      </SegBtn>
-                      <SegBtn active={bigRenderer === 'sigma'} onClick={() => setBigRenderer('sigma')} title="Sigma.js renderer">
-                        Sigma
-                      </SegBtn>
-                    </Segment>
-
                     <Segment>
                       <SegLabel>Layout</SegLabel>
                       <SegBtn active={!forcePositions} onClick={() => setForcePositions(null)} title="Deterministic radial layout">
@@ -448,20 +424,6 @@ export default function TopicGraph() {
   );
 }
 
-function ViewTab({ active, onClick, icon: Icon, label }) {
-  return (
-    <button
-      onClick={onClick}
-      className={clsx(
-        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
-        active ? 'bg-accent-500/20 text-accent-200' : 'bg-surface-950/60 text-slate-400 hover:text-slate-200'
-      )}
-    >
-      <Icon size={14} />
-      {label}
-    </button>
-  );
-}
 
 // Segmented-toolbar primitives for the unified big-graph control cluster.
 function Segment({ children }) {

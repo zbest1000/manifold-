@@ -14,6 +14,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 const API_URL = (process.env.TOPIC_CANVAS_API_URL || 'http://localhost:5000').replace(/\/$/, '');
+// Matches the backend's TC_AUTH_TOKEN when the server runs authenticated.
+const AUTH_TOKEN = process.env.TC_AUTH_TOKEN || process.env.TOPIC_CANVAS_TOKEN || '';
 
 async function api(path, options = {}) {
   const url = `${API_URL}${path}`;
@@ -21,7 +23,11 @@ async function api(path, options = {}) {
   try {
     res = await fetch(url, {
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+      headers: {
+        'Content-Type': 'application/json',
+        ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}),
+        ...(options.headers || {})
+      }
     });
   } catch (error) {
     throw new Error(`Cannot reach Topic Canvas backend at ${API_URL}: ${error.message}`);
@@ -170,6 +176,88 @@ server.tool(
     try {
       const q = new URLSearchParams({ topic, ...(limit ? { limit: String(limit) } : {}) });
       return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/messages?${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mqtt_sparkplug_topology',
+  'Sparkplug B device topology observed on a broker: Group → Edge Node → Device with online/offline state (BIRTH/DEATH) and the metric set each real publishing endpoint emits.',
+  { brokerId: z.string() },
+  async ({ brokerId }) => {
+    try {
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/sparkplug`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mqtt_sys_stats',
+  "Broker $SYS health summary (clients, subscription counts, throughput, uptime). Aggregate only — per-client subscriptions require the broker admin API (see mqtt_admin_pubsub).",
+  { brokerId: z.string() },
+  async ({ brokerId }) => {
+    try {
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/sys`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mqtt_resolve_subscriptions',
+  'Resolve MQTT subscription filters (with + / # wildcards) against the topics actually observed on a broker: exact match counts, covering subtree roots, and a sample of concrete matched topics. Answers "what would this filter receive?".',
+  {
+    brokerId: z.string(),
+    filters: z.array(z.string()).describe('Subscription filters, e.g. ["spBv1.0/#", "factory/+/temp"]'),
+    sampleLimit: z.number().optional().describe('Max concrete topics per filter (default 100, max 2000).')
+  },
+  async ({ brokerId, filters, sampleLimit }) => {
+    try {
+      return ok(
+        await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/subscriptions/resolve`, {
+          method: 'POST',
+          body: JSON.stringify({ filters, sampleLimit })
+        })
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mqtt_topic_tree',
+  'One level of the observed topic tree under a prefix, with per-child subtree counts — for drilling into large namespaces without transferring them.',
+  {
+    brokerId: z.string(),
+    prefix: z.string().optional().describe('Topic path prefix; omit for the root level.'),
+    limit: z.number().optional()
+  },
+  async ({ brokerId, prefix, limit }) => {
+    try {
+      const q = new URLSearchParams({ ...(prefix ? { prefix } : {}), ...(limit ? { limit: String(limit) } : {}) });
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/topictree?${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mqtt_admin_pubsub',
+  'Per-client subscriptions from the broker admin API (must be configured in the UI first), optionally wildcard-resolved against observed topics — the full "who receives what" map that core MQTT cannot provide.',
+  {
+    brokerId: z.string(),
+    resolve: z.boolean().optional().describe('Also resolve each filter against observed topics.')
+  },
+  async ({ brokerId, resolve }) => {
+    try {
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/admin/pubsub${resolve ? '?resolve=1' : ''}`));
     } catch (error) {
       return fail(error);
     }

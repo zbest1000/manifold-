@@ -45,17 +45,13 @@ MCP-capable client at the included MCP server.
   layouts without a second rendering engine on the frontend. OPC UA and i3X graphs
   default to the hierarchical `dot` layout; the MQTT graph has a one-click
   **Beautify** action.
-- **Show-all at massive scale** — a "show all" toggle renders every topic as a node
-  on the GPU. Two interchangeable WebGL renderers are available: a lean built-in
-  one (the default — verified rendering 63k+ nodes and staying responsive to
-  pan/zoom) and **Sigma.js**, which adds native camera controls. Both draw
-  viewport-culled, zoom-aware **labels** and connection lines, with a
-  **label-density slider** to dial how many labels show at once (from off to
-  dense). The built-in renderer is leaner at the extreme; Sigma is offered as an
-  alternative for its camera feel. A **Force layout** button computes an organic,
-  force-directed arrangement server-side (Graphviz `sfdp`, up to 30k nodes) and
-  renders it in the same view — the classic "network graph" look at scale, instead
-  of the deterministic radial default.
+- **Show-all at massive scale** — a "show all" toggle renders every topic as a
+  node on a lean WebGL renderer (verified at 63k+ nodes, responsive pan/zoom)
+  with viewport-culled, zoom-aware **labels**, connection lines, and a
+  **label-density slider** (off → dense). A **Force layout** button computes an
+  organic, force-directed arrangement server-side (Graphviz `sfdp`, up to 30k
+  nodes) — the classic "network graph" look at scale, instead of the
+  deterministic radial default.
 - **Flows: producer → topic → consumer lineage** — live visibility into who
   publishes and who receives what on a broker.
   - *Producers* — the real publishing endpoints of Sparkplug traffic:
@@ -148,6 +144,30 @@ npm run build      # builds the client into client/dist
 npm start          # serves the API and the built client from the backend
 ```
 
+### Authentication & persistence
+
+Topic Canvas is a **control plane** — it can publish to brokers (including
+Sparkplug commands that actuate equipment), disconnect connections, and start
+network scans. Before exposing it beyond localhost:
+
+```bash
+TC_AUTH_TOKEN=$(openssl rand -hex 24) npm start
+```
+
+- With `TC_AUTH_TOKEN` set, every `/api` route and the Socket.IO handshake
+  require `Authorization: Bearer <token>`; the web UI shows an unlock screen and
+  remembers the token locally. `/health` stays open for liveness probes.
+  Without it, the server runs open and warns loudly at startup.
+- **Connection profiles persist**: brokers (with their admin API configs),
+  OPC UA endpoints, and CESMII / i3X configs are saved to
+  `server/data/profiles.json` (override with `TC_DATA_DIR`; disable restore with
+  `TC_NO_RESTORE=1`) and automatically reconnected on startup. The file can
+  contain credentials — that is the point of persistence — so it is written
+  `0600` (owner-only). Protect the host and directory accordingly; encrypting it
+  without a real key-management story would be theater, so we don't pretend to.
+- The MCP server forwards the same token: set `TC_AUTH_TOKEN` in its
+  environment when the backend runs authenticated.
+
 ---
 
 ## MCP server
@@ -180,6 +200,9 @@ backend.
 | `mqtt_connect` / `mqtt_disconnect` / `mqtt_list_brokers` | Manage broker connections |
 | `mqtt_list_topics` / `mqtt_get_messages` | Read the topic tree and recent payloads |
 | `mqtt_subscribe` / `mqtt_publish` | Subscribe to filters and publish messages |
+| `mqtt_sparkplug_topology` / `mqtt_sys_stats` | Sparkplug device topology and broker `$SYS` health |
+| `mqtt_resolve_subscriptions` / `mqtt_topic_tree` | Resolve wildcard filters against observed topics; walk the topic tree |
+| `mqtt_admin_pubsub` | Per-client subscriptions from the broker admin API (optionally resolved) |
 | `opcua_connect` / `opcua_disconnect` / `opcua_list_connections` | Manage OPC UA connections |
 | `opcua_browse` / `opcua_read` / `opcua_monitor` | Walk the address space, read and monitor nodes |
 | `cesmii_configure` / `cesmii_status` | Configure and authenticate a CESMII SMIP instance |

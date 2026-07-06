@@ -14,21 +14,8 @@ import { downloadDataUrl, downloadJson } from '@/lib/download';
 import { useStore } from '@/store/store';
 import { Card, Button, Badge, Input, Field, EmptyState } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
+import ViewTab from '@/components/ViewTab';
 
-function ViewTab({ active, onClick, icon: Icon, label }) {
-  return (
-    <button
-      onClick={onClick}
-      className={clsx(
-        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
-        active ? 'bg-accent-500/20 text-accent-200' : 'bg-surface-950/60 text-slate-400 hover:text-slate-200'
-      )}
-    >
-      <Icon size={14} />
-      {label}
-    </button>
-  );
-}
 
 export default function I3x() {
   const graphStyle = useStore((s) => s.graphStyle);

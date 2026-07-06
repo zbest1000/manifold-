@@ -1,9 +1,26 @@
 // Thin REST client for the Topic Canvas backend. All calls are relative so the
 // Vite dev proxy (and production static serving) route them to the API.
+
+// Bearer token for servers started with TC_AUTH_TOKEN. Kept in localStorage and
+// attached to every request; the AuthGate sets it after the user unlocks.
+export function getAuthToken() {
+  return localStorage.getItem('tc.authToken') || '';
+}
+
+export function setAuthToken(token) {
+  if (token) localStorage.setItem('tc.authToken', token);
+  else localStorage.removeItem('tc.authToken');
+}
+
 async function request(path, options = {}) {
+  const token = getAuthToken();
   const res = await fetch(path, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    }
   });
   const text = await res.text();
   let body = {};

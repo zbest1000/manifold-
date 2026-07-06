@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import WebGLGraph from '@/graph/WebGLGraph';
-import SigmaGraph from '@/graph/SigmaGraph';
 import { buildMqttGraph } from '@/graph/buildGraph';
 import { api } from '@/lib/api';
 
@@ -18,7 +17,7 @@ import { api } from '@/lib/api';
 export default function Bench() {
   const params = new URLSearchParams(window.location.search);
   const n = Math.max(1, Math.min(1_000_000, Number(params.get('n')) || 50_000));
-  const renderer = params.get('r') === 'sigma' ? 'sigma' : 'webgl';
+  const renderer = 'webgl'; // single big-graph renderer (Sigma experiment removed)
   const density = params.has('d') ? Math.max(0, Math.min(1, Number(params.get('d')))) : 0.5;
   const skew = params.get('skew') === '1'; // irregular (realistic) topic tree vs uniform
   const force = params.get('force') === '1'; // fetch server sfdp layout (needs backend)
@@ -118,11 +117,7 @@ export default function Bench() {
 
   return (
     <div className="relative h-screen w-screen bg-black">
-      {renderer === 'sigma' ? (
-        <SigmaGraph data={graph} styleId="constellation" labelDensity={density} positions={positions} />
-      ) : (
-        <WebGLGraph data={graph} styleId="constellation" labelDensity={density} positions={positions} />
-      )}
+      <WebGLGraph data={graph} styleId="constellation" labelDensity={density} positions={positions} />
       <div
         data-testid="bench-status"
         className="pointer-events-none absolute left-2 top-2 rounded bg-white/10 px-2 py-1 font-mono text-[11px] text-white"

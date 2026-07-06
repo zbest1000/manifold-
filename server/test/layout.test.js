@@ -50,8 +50,13 @@ test('dot layout is hierarchical: root sits above its descendants (y-down)', asy
 test('fcose layout returns finite, distinct positions', async () => {
   const out = await computeLayout(graph, { engine: 'fcose' });
   assert.strictEqual(out.engine, 'fcose');
-  const xs = graph.nodes.map((n) => out.positions[n.id].x);
-  assert.ok(new Set(xs).size > 1, 'expected nodes to be spread out');
+  // fcose is randomized; assert distinct (x,y) points rather than x alone so a
+  // rare axis-aligned draw doesn't flake the test.
+  const points = graph.nodes.map((n) => `${out.positions[n.id].x.toFixed(3)},${out.positions[n.id].y.toFixed(3)}`);
+  assert.ok(new Set(points).size > 1, 'expected nodes to be spread out');
+  for (const n of graph.nodes) {
+    assert.ok(Number.isFinite(out.positions[n.id].x) && Number.isFinite(out.positions[n.id].y));
+  }
 });
 
 test('positions are shifted to a non-negative origin', async () => {

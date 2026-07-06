@@ -7,11 +7,13 @@ router.get('/status', (req, res) => {
   res.json(i3x.status());
 });
 
-// POST /api/i3x/connect { baseUrl, token? } — verify + store the server
+// POST /api/i3x/connect { baseUrl, token? } — verify + store the server (persisted)
 router.post('/connect', async (req, res) => {
-  const { i3x } = req.app.locals.services;
+  const { i3x, profiles } = req.app.locals.services;
   try {
-    res.json(await i3x.connect(req.body || {}));
+    const result = await i3x.connect(req.body || {});
+    profiles?.setI3x(req.body || {});
+    res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -28,7 +30,8 @@ router.post('/probe', async (req, res) => {
 
 // DELETE /api/i3x/connect
 router.delete('/connect', (req, res) => {
-  const { i3x } = req.app.locals.services;
+  const { i3x, profiles } = req.app.locals.services;
+  profiles?.clearI3x();
   res.json(i3x.reset());
 });
 

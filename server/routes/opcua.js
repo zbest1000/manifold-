@@ -7,22 +7,25 @@ router.get('/connections', (req, res) => {
   res.json({ connections: opcuaManager.getConnections() });
 });
 
-// POST /api/opcua/connections — connect to an endpoint
+// POST /api/opcua/connections — connect to an endpoint (profile persisted)
 router.post('/connections', async (req, res) => {
-  const { opcuaManager } = req.app.locals.services;
+  const { opcuaManager, profiles } = req.app.locals.services;
   try {
     const result = await opcuaManager.connect(req.body || {});
+    profiles?.upsertOpcua(result.connectionId, { ...(req.body || {}), id: result.connectionId });
     res.status(201).json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
-// DELETE /api/opcua/connections/:connectionId
+// DELETE /api/opcua/connections/:connectionId (profile removed)
 router.delete('/connections/:connectionId', async (req, res) => {
-  const { opcuaManager } = req.app.locals.services;
+  const { opcuaManager, profiles } = req.app.locals.services;
   try {
-    res.json(await opcuaManager.disconnect(req.params.connectionId));
+    const result = await opcuaManager.disconnect(req.params.connectionId);
+    profiles?.removeOpcua(req.params.connectionId);
+    res.json(result);
   } catch (error) {
     res.status(404).json({ error: error.message });
   }

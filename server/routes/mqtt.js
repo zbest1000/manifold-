@@ -7,11 +7,12 @@ router.get('/brokers', (req, res) => {
   res.json({ brokers: mqttManager.getConnections() });
 });
 
-// POST /api/mqtt/brokers — connect to a broker
+// POST /api/mqtt/brokers — connect to a broker (profile persisted for restart)
 router.post('/brokers', (req, res) => {
-  const { mqttManager } = req.app.locals.services;
+  const { mqttManager, profiles } = req.app.locals.services;
   try {
     const result = mqttManager.connectToBroker(req.body || {});
+    profiles?.upsertBroker(result.brokerId, { ...(req.body || {}), id: result.brokerId });
     res.status(202).json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -29,11 +30,13 @@ router.get('/brokers/:brokerId', (req, res) => {
   });
 });
 
-// DELETE /api/mqtt/brokers/:brokerId — disconnect
+// DELETE /api/mqtt/brokers/:brokerId — disconnect (profile removed)
 router.delete('/brokers/:brokerId', (req, res) => {
-  const { mqttManager } = req.app.locals.services;
+  const { mqttManager, profiles } = req.app.locals.services;
   try {
-    res.json(mqttManager.disconnectFromBroker(req.params.brokerId));
+    const result = mqttManager.disconnectFromBroker(req.params.brokerId);
+    profiles?.removeBroker(req.params.brokerId);
+    res.json(result);
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
@@ -111,16 +114,19 @@ router.get('/brokers/:brokerId/admin', (req, res) => {
 });
 
 router.post('/brokers/:brokerId/admin', (req, res) => {
-  const { mqttManager } = req.app.locals.services;
+  const { mqttManager, profiles } = req.app.locals.services;
   try {
-    res.json(mqttManager.setBrokerAdmin(req.params.brokerId, req.body || {}));
+    const result = mqttManager.setBrokerAdmin(req.params.brokerId, req.body || {});
+    profiles?.setBrokerAdmin(req.params.brokerId, req.body || {});
+    res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
 router.delete('/brokers/:brokerId/admin', (req, res) => {
-  const { mqttManager } = req.app.locals.services;
+  const { mqttManager, profiles } = req.app.locals.services;
+  profiles?.clearBrokerAdmin(req.params.brokerId);
   res.json(mqttManager.clearBrokerAdmin(req.params.brokerId));
 });
 

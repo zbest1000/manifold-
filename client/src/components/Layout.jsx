@@ -1,17 +1,21 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Share2, Radio, Cpu, Radar, Settings as SettingsIcon, Activity, Factory, Boxes, Network } from 'lucide-react';
+import { Share2, Radio, Cpu, Radar, Settings as SettingsIcon, Activity, Factory, Boxes, Waypoints } from 'lucide-react';
 import clsx from 'clsx';
 import { useStore } from '@/store/store';
 import { StatusDot } from './ui';
 
+// Task-shaped nav: explore (Topics), audit (Flows), then per-protocol sources.
+// Flows is top-level — producer → topic → consumer visibility is a primary job
+// of the tool, not a sub-tab. (The old "Unified" overlay page is retired; its
+// job is better served by Topics + Flows.)
 const NAV = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
-  { to: '/topics', label: 'Topic Graph', icon: Share2 },
+  { to: '/topics', label: 'Topics', icon: Share2 },
+  { to: '/flows', label: 'Flows', icon: Waypoints },
   { to: '/brokers', label: 'MQTT Brokers', icon: Radio },
   { to: '/opcua', label: 'OPC UA', icon: Cpu },
   { to: '/cesmii', label: 'CESMII SMIP', icon: Factory },
   { to: '/i3x', label: 'i3X', icon: Boxes },
-  { to: '/unified', label: 'Unified', icon: Network },
   { to: '/discovery', label: 'Discovery', icon: Radar },
   { to: '/settings', label: 'Settings', icon: SettingsIcon }
 ];

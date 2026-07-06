@@ -30,6 +30,7 @@ class MqttManager extends EventEmitter {
     this.sparkplug = new Map(); // brokerId -> SparkplugRegistry (device topology)
     this.admin = new Map(); // brokerId -> broker admin API config (per-client subs)
     this.tries = new Map(); // brokerId -> { trie, indexedThrough } (lazy; built on first resolve)
+    this.sys = new Map(); // brokerId -> Set($SYS topic) — keeps /sys reads O(sys), not O(topics)
     this.recent = new Map(); // brokerId -> recent message ring (bounded)
     this.msgSeq = 0; // fast monotonic id (avoids uuid per message on the hot path)
     this.subscriptions = new Map(); // brokerId -> Set(topic filters)
@@ -108,6 +109,7 @@ class MqttManager extends EventEmitter {
     this.clients.set(brokerId, client);
     this.stores.set(brokerId, new TopicStore(MAX_TOPICS));
     this.sparkplug.set(brokerId, new SparkplugRegistry());
+    this.sys.set(brokerId, new Set());
     this.recent.set(brokerId, []);
     this.subscriptions.set(brokerId, new Set());
     this.setupClientEventHandlers(client, brokerId);
@@ -174,6 +176,11 @@ class MqttManager extends EventEmitter {
 
     store.ingest(topic, message, packet.qos, packet.retain);
     info.metrics.topicCount = store.topicCount();
+    // One char-code check per message; $SYS traffic is low-rate and tracking the
+    // set here keeps the /sys endpoint O(|$SYS|) instead of scanning every topic.
+    if (topic.charCodeAt(0) === 36 /* '$' */ && topic.startsWith('$SYS/')) {
+      this.sys.get(brokerId)?.add(topic);
+    }
   }
 
   // Build the full message object for a drained topic row (parse, type
@@ -329,6 +336,7 @@ class MqttManager extends EventEmitter {
     this.sparkplug.delete(brokerId);
     this.admin.delete(brokerId);
     this.tries.delete(brokerId);
+    this.sys.delete(brokerId);
     this.recent.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
@@ -449,12 +457,16 @@ class MqttManager extends EventEmitter {
   // client/subscription COUNTS, not a per-client subscription map (see routes).
   getSysStats(brokerId) {
     const store = this.stores.get(brokerId);
-    if (!store) return { available: false, raw: {}, summary: {} };
-    const rows = store.getByPrefix('$SYS/');
-    if (!rows.length) return { available: false, raw: {}, summary: {} };
+    const sysTopics = this.sys.get(brokerId);
+    if (!store || !sysTopics || sysTopics.size === 0) return { available: false, raw: {}, summary: {} };
 
+    // O(|$SYS|): topics tracked at ingest, values read directly by slot.
     const raw = {};
-    for (const row of rows) raw[row.topic] = row.buffer.toString('utf8');
+    for (const topic of sysTopics) {
+      const row = store.getLatest(topic);
+      if (row) raw[topic] = row.buffer.toString('utf8');
+    }
+    if (Object.keys(raw).length === 0) return { available: false, raw: {}, summary: {} };
     const num = (t) => {
       const v = parseFloat(raw[t]);
       return Number.isFinite(v) ? v : undefined;
@@ -596,6 +608,7 @@ class MqttManager extends EventEmitter {
     this.sparkplug.clear();
     this.admin.clear();
     this.tries.clear();
+    this.sys.clear();
     this.recent.clear();
   }
 }

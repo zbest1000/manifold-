@@ -7,13 +7,14 @@ router.get('/status', (req, res) => {
   res.json(cesmii.status());
 });
 
-// POST /api/cesmii/config — configure and validate the SMIP connection
+// POST /api/cesmii/config — configure and validate the SMIP connection (persisted)
 router.post('/config', async (req, res) => {
-  const { cesmii } = req.app.locals.services;
+  const { cesmii, profiles } = req.app.locals.services;
   try {
     cesmii.configure(req.body || {});
     // Eagerly authenticate so the caller learns immediately if credentials are wrong
     await cesmii.authenticate();
+    profiles?.setCesmii(req.body || {});
     res.json(cesmii.status());
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -22,7 +23,8 @@ router.post('/config', async (req, res) => {
 
 // DELETE /api/cesmii/config — clear stored configuration
 router.delete('/config', (req, res) => {
-  const { cesmii } = req.app.locals.services;
+  const { cesmii, profiles } = req.app.locals.services;
+  profiles?.clearCesmii();
   res.json(cesmii.reset());
 });
 
