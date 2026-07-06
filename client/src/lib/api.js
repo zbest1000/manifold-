@@ -30,6 +30,11 @@ export const api = {
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}/messages?topic=${encodeURIComponent(topic)}&limit=${limit}`),
   brokerSparkplug: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/sparkplug`),
   brokerSys: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/sys`),
+  getBrokerAdmin: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin`),
+  setBrokerAdmin: (id, config) =>
+    request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin`, { method: 'POST', body: JSON.stringify(config) }),
+  clearBrokerAdmin: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin`, { method: 'DELETE' }),
+  brokerAdminPubSub: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin/pubsub`),
   subscribe: (id, topic, qos = 0) =>
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}/subscribe`, {
       method: 'POST',

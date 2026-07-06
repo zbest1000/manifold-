@@ -100,6 +100,45 @@ router.get('/brokers/:brokerId/sys', (req, res) => {
   });
 });
 
+// GET/POST/DELETE /api/mqtt/brokers/:brokerId/admin — broker admin API config
+// (the ONLY honest source of per-client subscriptions). Secret is never echoed.
+router.get('/brokers/:brokerId/admin', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  res.json(mqttManager.getBrokerAdmin(req.params.brokerId));
+});
+
+router.post('/brokers/:brokerId/admin', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  try {
+    res.json(mqttManager.setBrokerAdmin(req.params.brokerId, req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.delete('/brokers/:brokerId/admin', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  res.json(mqttManager.clearBrokerAdmin(req.params.brokerId));
+});
+
+// GET /api/mqtt/brokers/:brokerId/admin/pubsub — clients + their subscriptions
+// fetched live from the configured broker admin API (e.g. EMQX REST). This is
+// "who subscribes to what", which core MQTT / $SYS cannot provide.
+router.get('/brokers/:brokerId/admin/pubsub', async (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  try {
+    res.json(await mqttManager.fetchAdminPubSub(req.params.brokerId));
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
 // POST /api/mqtt/brokers/:brokerId/subscribe { topic, qos }
 router.post('/brokers/:brokerId/subscribe', (req, res) => {
   const { mqttManager } = req.app.locals.services;

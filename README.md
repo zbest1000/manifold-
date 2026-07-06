@@ -62,12 +62,14 @@ MCP-capable client at the included MCP server.
   the metric set each endpoint publishes. Real device identity, not topic strings.
   Alongside it, a **broker `$SYS` health panel** (Mosquitto/EMQX-style) shows
   client + subscription counts, throughput and uptime.
-  - *On auditing subscribers:* MQTT decouples publishers and subscribers, so the
-    protocol and `$SYS` expose only **aggregate** client/subscription counts, not a
-    per-client subscription map. "Who publishes what" is fully observable (the
-    Sparkplug tree and the topic graphs); "who subscribes to what" requires a
-    broker admin API (EMQX/HiveMQ REST, `mosquitto_ctrl`). The UI states this
-    plainly rather than implying it can see more than MQTT allows.
+  - *Subscriber audit (who subscribes to what):* MQTT decouples publishers and
+    subscribers, so the protocol and `$SYS` expose only **aggregate** counts, not a
+    per-client subscription map — only a **broker admin API** can. The Audit view's
+    **Subscribers** tab connects to an **EMQX v5 REST** endpoint (API key stored
+    server-side) and renders the real **client → subscribed-topic** graph, with
+    shared filters becoming hubs. HiveMQ / `mosquitto_ctrl` backends fit behind the
+    same switch. When no admin API is configured, the UI says so plainly rather
+    than implying it can see more than MQTT allows.
 - **Honest network discovery** — TCP port probing across a CIDR range, each hit
   verified with a real protocol handshake. No fabricated results.
 - **CESMII SMIP integration** — connect to a Smart Manufacturing Innovation Platform

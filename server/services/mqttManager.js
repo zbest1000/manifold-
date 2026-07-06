@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const SparkplugDecoder = require('./sparkplugDecoder');
 const SparkplugRegistry = require('./sparkplugRegistry');
 const TopicStore = require('./topicStore');
+const brokerAdmin = require('./brokerAdmin');
 
 const STATS_INTERVAL_MS = 2000;
 const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -26,6 +27,7 @@ class MqttManager extends EventEmitter {
     this.clients = new Map(); // brokerId -> mqtt client
     this.stores = new Map(); // brokerId -> TopicStore (memory-lean struct-of-arrays)
     this.sparkplug = new Map(); // brokerId -> SparkplugRegistry (device topology)
+    this.admin = new Map(); // brokerId -> broker admin API config (per-client subs)
     this.recent = new Map(); // brokerId -> recent message ring (bounded)
     this.msgSeq = 0; // fast monotonic id (avoids uuid per message on the hot path)
     this.subscriptions = new Map(); // brokerId -> Set(topic filters)
@@ -323,6 +325,7 @@ class MqttManager extends EventEmitter {
     this.connections.delete(brokerId);
     this.stores.delete(brokerId);
     this.sparkplug.delete(brokerId);
+    this.admin.delete(brokerId);
     this.recent.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
@@ -470,6 +473,40 @@ class MqttManager extends EventEmitter {
     return { available: true, raw, summary };
   }
 
+  // Broker admin API config (per-client subscription source). The secret is kept
+  // server-side and never echoed back.
+  setBrokerAdmin(brokerId, config = {}) {
+    if (!this.connections.has(brokerId)) throw new Error(`Unknown broker ${brokerId}`);
+    if (!config.url) throw new Error('admin url is required');
+    this.admin.set(brokerId, {
+      type: config.type || 'emqx',
+      url: config.url,
+      apiKey: config.apiKey || '',
+      apiSecret: config.apiSecret || ''
+    });
+    return this.getBrokerAdmin(brokerId);
+  }
+
+  getBrokerAdmin(brokerId) {
+    const cfg = this.admin.get(brokerId);
+    if (!cfg) return { configured: false };
+    return { configured: true, type: cfg.type, url: cfg.url, hasKey: Boolean(cfg.apiKey) };
+  }
+
+  clearBrokerAdmin(brokerId) {
+    this.admin.delete(brokerId);
+    return { configured: false };
+  }
+
+  async fetchAdminPubSub(brokerId) {
+    const cfg = this.admin.get(brokerId);
+    if (!cfg) {
+      return { configured: false, source: null, clients: [], subscriptions: [] };
+    }
+    const result = await brokerAdmin.fetchPubSub(cfg);
+    return { configured: true, ...result };
+  }
+
   shutdown() {
     clearInterval(this.cleanupTimer);
     clearInterval(this.statsTimer);
@@ -479,6 +516,7 @@ class MqttManager extends EventEmitter {
     this.connections.clear();
     this.stores.clear();
     this.sparkplug.clear();
+    this.admin.clear();
     this.recent.clear();
   }
 }

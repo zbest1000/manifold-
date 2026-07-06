@@ -15,7 +15,7 @@ import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
-import SparkplugAudit from '@/components/SparkplugAudit';
+import AuditView from '@/components/AuditView';
 import TopicTree from '@/components/TopicTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
@@ -241,7 +241,7 @@ export default function TopicGraph() {
               <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
               <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
-              <ViewTab active={view === 'devices'} onClick={() => setView('devices')} icon={Cpu} label="Devices" />
+              <ViewTab active={view === 'devices'} onClick={() => setView('devices')} icon={Cpu} label="Audit" />
             </div>
             <select
               value={brokerId || ''}
@@ -263,7 +263,7 @@ export default function TopicGraph() {
 
       <div className="relative flex flex-1 overflow-hidden">
         {view === 'devices' ? (
-          <SparkplugAudit broker={broker} />
+          <AuditView broker={broker} />
         ) : view === 'tree' ? (
           <div className="flex w-full max-w-md flex-col border-r border-white/5 bg-surface-900/30">
             <div className="flex items-center gap-1.5 border-b border-white/5 px-3 py-2">
@@ -332,7 +332,7 @@ export default function TopicGraph() {
               />
             )}
             {(graph.capped || showAll) && (
-              <div className="absolute left-4 top-16 flex items-center gap-2">
+              <div className="absolute left-4 top-16 flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => setShowAll((v) => !v)}
                   className={clsx(
@@ -347,70 +347,60 @@ export default function TopicGraph() {
                     ? `Showing all ${graph.nodes.length.toLocaleString()} nodes`
                     : `Show all ${brokerTopics.length.toLocaleString()} topics as nodes`}
                 </button>
+
+                {/* One unified control cluster for the big-graph view */}
                 {showAll && (
-                  <div className="flex overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-[11px] backdrop-blur">
-                    <button
-                      onClick={() => setBigRenderer('webgl')}
-                      title="Built-in WebGL renderer"
-                      className={clsx('px-2.5 py-2 transition', bigRenderer === 'webgl' ? 'bg-accent-500/20 text-accent-200' : 'text-slate-400 hover:bg-white/5')}
-                    >
-                      WebGL
-                    </button>
-                    <button
-                      onClick={() => setBigRenderer('sigma')}
-                      title="Sigma.js renderer (zoom-aware labels)"
-                      className={clsx('border-l border-white/10 px-2.5 py-2 transition', bigRenderer === 'sigma' ? 'bg-accent-500/20 text-accent-200' : 'text-slate-400 hover:bg-white/5')}
-                    >
-                      Sigma
-                    </button>
-                  </div>
-                )}
-                {showAll && (
-                  <button
-                    onClick={() => (forcePositions ? setForcePositions(null) : runForceLayout())}
-                    disabled={forceBusy || (!forcePositions && graph.nodes.length > SFDP_MAX)}
-                    title={
-                      graph.nodes.length > SFDP_MAX
-                        ? `Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes`
-                        : forcePositions
-                          ? 'Back to radial layout'
-                          : 'Organic force-directed layout (computed server-side)'
-                    }
-                    className={clsx(
-                      'flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] backdrop-blur transition disabled:cursor-not-allowed disabled:opacity-40',
-                      forcePositions
-                        ? 'border-accent-500/60 bg-accent-500/15 text-accent-200'
-                        : 'border-white/10 bg-surface-900/80 text-slate-300 hover:border-white/25'
-                    )}
-                  >
-                    {forceBusy ? <Loader2 size={13} className="animate-spin" /> : <Waypoints size={13} />}
-                    {forcePositions ? 'Radial' : forceBusy ? 'Computing…' : 'Force layout'}
-                  </button>
-                )}
-                {showAll && (
-                  <div
-                    className="flex items-center gap-2 rounded-xl border border-white/10 bg-surface-900/80 px-2.5 py-2 text-[11px] text-slate-300 backdrop-blur"
-                    title="Label density"
-                  >
-                    <Tag size={13} className="text-slate-400" />
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={labelDensity}
-                      onChange={(e) => setLabelDensity(Number(e.target.value))}
-                      className="h-1 w-24 cursor-pointer accent-accent-400"
-                    />
-                    <span className="w-8 tabular-nums text-slate-500">
-                      {labelDensity <= 0.001 ? 'off' : `${Math.round(labelDensity * 100)}%`}
-                    </span>
+                  <div className="flex items-stretch divide-x divide-white/10 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-[11px] backdrop-blur">
+                    <Segment>
+                      <SegLabel>Renderer</SegLabel>
+                      <SegBtn active={bigRenderer === 'webgl'} onClick={() => setBigRenderer('webgl')} title="Built-in WebGL renderer">
+                        WebGL
+                      </SegBtn>
+                      <SegBtn active={bigRenderer === 'sigma'} onClick={() => setBigRenderer('sigma')} title="Sigma.js renderer">
+                        Sigma
+                      </SegBtn>
+                    </Segment>
+
+                    <Segment>
+                      <SegLabel>Layout</SegLabel>
+                      <SegBtn active={!forcePositions} onClick={() => setForcePositions(null)} title="Deterministic radial layout">
+                        Radial
+                      </SegBtn>
+                      <SegBtn
+                        active={Boolean(forcePositions)}
+                        onClick={runForceLayout}
+                        disabled={forceBusy || graph.nodes.length > SFDP_MAX}
+                        title={
+                          graph.nodes.length > SFDP_MAX
+                            ? `Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes`
+                            : 'Organic force-directed layout (server-computed sfdp)'
+                        }
+                      >
+                        {forceBusy ? <Loader2 size={12} className="animate-spin" /> : <Waypoints size={12} />}
+                        Force
+                      </SegBtn>
+                    </Segment>
+
+                    <Segment>
+                      <SegLabel>
+                        <Tag size={11} /> Labels
+                      </SegLabel>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={labelDensity}
+                        onChange={(e) => setLabelDensity(Number(e.target.value))}
+                        className="h-1 w-20 cursor-pointer accent-accent-400"
+                        title="Label density"
+                      />
+                      <span className="w-7 tabular-nums text-slate-500">{labelDensity <= 0.001 ? 'off' : `${Math.round(labelDensity * 100)}%`}</span>
+                    </Segment>
                   </div>
                 )}
                 {showAll && graph.nodes.length > 60000 && (
-                  <span className="rounded-lg bg-surface-900/70 px-2 py-1 text-[10px] text-slate-500 backdrop-blur">
-                    heavy — zoom in for detail
-                  </span>
+                  <span className="rounded-lg bg-surface-900/70 px-2 py-1 text-[10px] text-slate-500 backdrop-blur">heavy — zoom in for detail</span>
                 )}
               </div>
             )}
@@ -451,6 +441,29 @@ function ViewTab({ active, onClick, icon: Icon, label }) {
     >
       <Icon size={14} />
       {label}
+    </button>
+  );
+}
+
+// Segmented-toolbar primitives for the unified big-graph control cluster.
+function Segment({ children }) {
+  return <div className="flex items-center gap-1.5 px-2 py-1.5">{children}</div>;
+}
+function SegLabel({ children }) {
+  return <span className="flex items-center gap-1 pr-0.5 text-[10px] uppercase tracking-wide text-slate-500">{children}</span>;
+}
+function SegBtn({ active, onClick, disabled, title, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={clsx(
+        'flex items-center gap-1 rounded-md px-2 py-1 transition disabled:cursor-not-allowed disabled:opacity-40',
+        active ? 'bg-accent-500/20 text-accent-200' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+      )}
+    >
+      {children}
     </button>
   );
 }

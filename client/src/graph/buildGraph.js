@@ -275,6 +275,71 @@ export function buildSparkplugGraph(broker, topology) {
   return { nodes: Array.from(nodes.values()), links };
 }
 
+/**
+ * Build a pub/sub audit graph from a broker admin API: Broker → Client → the
+ * topic filters that client SUBSCRIBES to. This is the one view that answers "who
+ * subscribes to what" — sourced from the broker's admin API, not observed traffic.
+ * Topic-filter nodes are shared, so a filter many clients subscribe to becomes a
+ * visible hub.
+ */
+export function buildPubSubGraph(broker, { clients = [], subscriptions = [] }) {
+  const nodes = new Map();
+  const links = [];
+  const rootId = `ps:${broker.id}:root`;
+  nodes.set(rootId, {
+    id: rootId,
+    label: broker.name || `${broker.host}:${broker.port}`,
+    group: 'broker',
+    kind: 'broker',
+    degree: 0,
+    meta: { brokerId: broker.id }
+  });
+
+  for (const c of clients) {
+    const id = `ps:${broker.id}:c:${c.id}`;
+    nodes.set(id, {
+      id,
+      label: c.id,
+      group: c.connected ? 'telemetry' : 'alarm',
+      kind: 'mqtt-client',
+      degree: 0,
+      meta: { kind: 'client', username: c.username, ip: c.ip, connected: c.connected, subscriptionsCount: c.subscriptionsCount }
+    });
+    links.push({ source: rootId, target: id });
+  }
+
+  for (const s of subscriptions) {
+    const clientNode = `ps:${broker.id}:c:${s.clientId}`;
+    if (!nodes.has(clientNode)) {
+      // A subscription for a client not in the clients list — add a stub client.
+      nodes.set(clientNode, {
+        id: clientNode,
+        label: s.clientId,
+        group: 'telemetry',
+        kind: 'mqtt-client',
+        degree: 0,
+        meta: { kind: 'client' }
+      });
+      links.push({ source: rootId, target: clientNode });
+    }
+    const topicId = `ps:${broker.id}:t:${s.topic}`;
+    if (!nodes.has(topicId)) {
+      nodes.set(topicId, {
+        id: topicId,
+        label: s.topic,
+        group: 'topic',
+        kind: 'sub-filter',
+        degree: 0,
+        meta: { kind: 'filter', topic: s.topic }
+      });
+    }
+    links.push({ source: clientNode, target: topicId, kind: 'subscribe' });
+  }
+
+  computeDegree(nodes, links);
+  return { nodes: Array.from(nodes.values()), links };
+}
+
 function opcuaGroup(nodeClass) {
   switch (nodeClass) {
     case 'Variable':

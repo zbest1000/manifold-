@@ -166,7 +166,7 @@ export default function SparkplugAudit({ broker }) {
             <Info size={15} /> Who subscribes to what?
           </div>
           <p className="text-[11px] leading-relaxed text-slate-400">
-            MQTT decouples publishers and subscribers — the protocol (and <code>$SYS</code>) expose only <strong>aggregate</strong> client and subscription <em>counts</em>, not a per-client subscription map. Full pub/sub auditing needs a broker admin API (EMQX / HiveMQ REST, or <code>mosquitto_ctrl</code>). What you <em>can</em> see fully is <strong>who publishes what</strong>: the Sparkplug device tree above, and every topic being published in the graph views.
+            MQTT decouples publishers and subscribers — the protocol (and <code>$SYS</code>) expose only <strong>aggregate</strong> client and subscription <em>counts</em>, not a per-client subscription map. This tab shows <strong>who publishes what</strong> (the Sparkplug device tree + every published topic). For <strong>who subscribes to what</strong>, open the <strong>Subscribers</strong> tab and connect a broker admin API (EMQX / HiveMQ REST, or <code>mosquitto_ctrl</code>) — the only source that can reveal per-client subscriptions.
           </p>
         </Card>
       </div>
