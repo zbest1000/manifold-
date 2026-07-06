@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const SparkplugDecoder = require('./sparkplugDecoder');
 const SparkplugRegistry = require('./sparkplugRegistry');
 const TopicStore = require('./topicStore');
+const TopicTrie = require('./topicTrie');
 const brokerAdmin = require('./brokerAdmin');
 
 const STATS_INTERVAL_MS = 2000;
@@ -28,6 +29,7 @@ class MqttManager extends EventEmitter {
     this.stores = new Map(); // brokerId -> TopicStore (memory-lean struct-of-arrays)
     this.sparkplug = new Map(); // brokerId -> SparkplugRegistry (device topology)
     this.admin = new Map(); // brokerId -> broker admin API config (per-client subs)
+    this.tries = new Map(); // brokerId -> { trie, indexedThrough } (lazy; built on first resolve)
     this.recent = new Map(); // brokerId -> recent message ring (bounded)
     this.msgSeq = 0; // fast monotonic id (avoids uuid per message on the hot path)
     this.subscriptions = new Map(); // brokerId -> Set(topic filters)
@@ -326,6 +328,7 @@ class MqttManager extends EventEmitter {
     this.stores.delete(brokerId);
     this.sparkplug.delete(brokerId);
     this.admin.delete(brokerId);
+    this.tries.delete(brokerId);
     this.recent.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
@@ -507,6 +510,81 @@ class MqttManager extends EventEmitter {
     return { configured: true, ...result };
   }
 
+  // ---- Wildcard resolution: filters -> concrete observed topics ------------
+  // A subscription filter is a query, not a destination; these methods answer
+  // what a filter ACTUALLY matches against the live topic set. The trie is
+  // deliberately kept off the ingest hot path: it is built lazily on first use
+  // (O(topics) once) and caught up incrementally per call (O(new topics only),
+  // via the store's monotonic slot -> topic array).
+
+  getTrie(brokerId) {
+    const store = this.stores.get(brokerId);
+    if (!store) return null;
+    let entry = this.tries.get(brokerId);
+    if (!entry) {
+      entry = { trie: new TopicTrie(), indexedThrough: 0 };
+      this.tries.set(brokerId, entry);
+    }
+    for (let slot = entry.indexedThrough; slot < store.n; slot++) {
+      const topic = store.topicAt(slot);
+      if (topic !== undefined) entry.trie.insert(topic, slot);
+    }
+    entry.indexedThrough = store.n;
+    return entry.trie;
+  }
+
+  /**
+   * Resolve subscription filters against observed topics. Filters are deduped
+   * (many clients typically share a handful). Sample rows are hydrated from the
+   * store (ts / retain / msgCount). Counts are exact even when samples truncate.
+   */
+  resolveSubscriptions(brokerId, filters, { sampleLimit = 100, rootsLimit = 50 } = {}) {
+    const store = this.stores.get(brokerId);
+    const trie = this.getTrie(brokerId);
+    if (!store || !trie) return null;
+
+    const unique = [...new Set((filters || []).map(String))];
+    const results = [];
+    for (const filter of unique) {
+      const r = trie.resolve(filter, { sampleLimit, rootsLimit });
+      results.push({
+        ...r,
+        sample: r.sample.map(({ topic, slot }) => ({
+          topic,
+          ts: store.ts[slot],
+          retain: (store.flags[slot] & 1) === 1,
+          msgCount: store.count[slot]
+        }))
+      });
+    }
+    return {
+      topicTotal: store.topicCount(),
+      dropped: store.dropped,
+      generation: store.n,
+      results
+    };
+  }
+
+  /** One level of the observed topic tree (lazy drill-down for the Flows view). */
+  getTopicChildren(brokerId, prefix, { limit = 500 } = {}) {
+    const store = this.stores.get(brokerId);
+    const trie = this.getTrie(brokerId);
+    if (!store || !trie) return null;
+    const out = trie.children(prefix, { limit });
+    // Hydrate terminal children with liveness info from the store.
+    for (const c of out.children) {
+      if (c.isTopic) {
+        const slot = store.index.get(c.path);
+        if (slot !== undefined) {
+          c.ts = store.ts[slot];
+          c.retain = (store.flags[slot] & 1) === 1;
+          c.msgCount = store.count[slot];
+        }
+      }
+    }
+    return out;
+  }
+
   shutdown() {
     clearInterval(this.cleanupTimer);
     clearInterval(this.statsTimer);
@@ -517,6 +595,7 @@ class MqttManager extends EventEmitter {
     this.stores.clear();
     this.sparkplug.clear();
     this.admin.clear();
+    this.tries.clear();
     this.recent.clear();
   }
 }

@@ -124,19 +124,71 @@ router.delete('/brokers/:brokerId/admin', (req, res) => {
   res.json(mqttManager.clearBrokerAdmin(req.params.brokerId));
 });
 
-// GET /api/mqtt/brokers/:brokerId/admin/pubsub — clients + their subscriptions
-// fetched live from the configured broker admin API (e.g. EMQX REST). This is
-// "who subscribes to what", which core MQTT / $SYS cannot provide.
+// GET /api/mqtt/brokers/:brokerId/admin/pubsub[?resolve=1&sampleLimit=25]
+// Clients + their subscriptions fetched live from the configured broker admin
+// API (e.g. EMQX REST) — "who subscribes to what", which core MQTT / $SYS cannot
+// provide. With ?resolve=1 each unique filter is additionally RESOLVED against
+// the observed topic set (exact match counts, covering roots, topic samples), so
+// a broad filter like `spBv1.0/#` shows the concrete topics it actually receives.
 router.get('/brokers/:brokerId/admin/pubsub', async (req, res) => {
   const { mqttManager } = req.app.locals.services;
   if (!mqttManager.getConnection(req.params.brokerId)) {
     return res.status(404).json({ error: 'Broker not found' });
   }
   try {
-    res.json(await mqttManager.fetchAdminPubSub(req.params.brokerId));
+    const pubsub = await mqttManager.fetchAdminPubSub(req.params.brokerId);
+    if (req.query.resolve === '1' && pubsub.configured) {
+      const sampleLimit = Math.min(Number(req.query.sampleLimit) || 50, 2000);
+      const filters = pubsub.subscriptions.map((s) => s.topic);
+      const resolved = mqttManager.resolveSubscriptions(req.params.brokerId, filters, { sampleLimit });
+      if (resolved) {
+        pubsub.resolution = {
+          topicTotal: resolved.topicTotal,
+          dropped: resolved.dropped,
+          generation: resolved.generation,
+          byFilter: Object.fromEntries(resolved.results.map((r) => [r.filter, r]))
+        };
+      }
+    }
+    res.json(pubsub);
   } catch (error) {
     res.status(502).json({ error: error.message });
   }
+});
+
+// POST /api/mqtt/brokers/:brokerId/subscriptions/resolve { filters, sampleLimit?, rootsLimit? }
+// Standalone wildcard-resolution primitive: what would these filters receive,
+// given the topics actually observed on this broker? Counts are always exact;
+// samples/roots are bounded.
+router.post('/brokers/:brokerId/subscriptions/resolve', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  const { filters, sampleLimit, rootsLimit } = req.body || {};
+  if (!Array.isArray(filters) || filters.length === 0) {
+    return res.status(400).json({ error: 'filters[] is required' });
+  }
+  if (filters.length > 5000) {
+    return res.status(400).json({ error: 'too many filters (max 5000)' });
+  }
+  const result = mqttManager.resolveSubscriptions(req.params.brokerId, filters, {
+    sampleLimit: Math.min(Number(sampleLimit) || 100, 2000),
+    rootsLimit: Math.min(Number(rootsLimit) || 50, 500)
+  });
+  res.json(result);
+});
+
+// GET /api/mqtt/brokers/:brokerId/topictree?prefix=a/b&limit=500
+// One level of the observed topic tree with subtree counts — lazy drill-down for
+// the Flows lineage view (never ships a whole subtree).
+router.get('/brokers/:brokerId/topictree', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  const limit = Math.min(Number(req.query.limit) || 500, 2000);
+  res.json(mqttManager.getTopicChildren(req.params.brokerId, req.query.prefix || '', { limit }));
 });
 
 // POST /api/mqtt/brokers/:brokerId/subscribe { topic, qos }

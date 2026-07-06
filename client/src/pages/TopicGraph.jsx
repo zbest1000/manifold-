@@ -15,7 +15,7 @@ import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
-import AuditView from '@/components/AuditView';
+import FlowsView from '@/components/FlowsView';
 import TopicTree from '@/components/TopicTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
@@ -50,6 +50,8 @@ export default function TopicGraph() {
   const graphStyle = useStore((s) => s.graphStyle);
   const graphLayout = useStore((s) => s.graphLayout);
   const setGraphLayout = useStore((s) => s.setGraphLayout);
+  const coverage = useStore((s) => s.coverage);
+  const setCoverage = useStore((s) => s.setCoverage);
   const flowEnabled = useStore((s) => s.flowEnabled);
   const activitySize = useStore((s) => s.activitySize);
   const showValues = useStore((s) => s.showValues);
@@ -130,6 +132,12 @@ export default function TopicGraph() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fullGraph, collapseKey]
   );
+
+  // "Show coverage on topic map" from the Flows view: jump to the graph so the
+  // painted trail is immediately visible.
+  useEffect(() => {
+    if (coverage?.brokerId === brokerId) setView('graph');
+  }, [coverage, brokerId]);
 
   // A server-computed force layout is a snapshot for a specific node set — drop it
   // when the graph changes (new topics, collapse) so stale coordinates aren't
@@ -241,7 +249,7 @@ export default function TopicGraph() {
               <ViewTab active={view === 'graph'} onClick={() => setView('graph')} icon={Share2} label="Graph" />
               <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
-              <ViewTab active={view === 'devices'} onClick={() => setView('devices')} icon={Cpu} label="Audit" />
+              <ViewTab active={view === 'flows'} onClick={() => setView('flows')} icon={Cpu} label="Flows" />
             </div>
             <select
               value={brokerId || ''}
@@ -262,8 +270,8 @@ export default function TopicGraph() {
       />
 
       <div className="relative flex flex-1 overflow-hidden">
-        {view === 'devices' ? (
-          <AuditView broker={broker} />
+        {view === 'flows' ? (
+          <FlowsView broker={broker} />
         ) : view === 'tree' ? (
           <div className="flex w-full max-w-md flex-col border-r border-white/5 bg-surface-900/30">
             <div className="flex items-center gap-1.5 border-b border-white/5 px-3 py-2">
@@ -327,9 +335,19 @@ export default function TopicGraph() {
                 activitySource={activitySource}
                 activitySize={activitySize}
                 nodeValues={showValues ? nodeValues : null}
-                matchIds={matchIds}
+                matchIds={coverage?.brokerId === brokerId ? coverage.matchIds : matchIds}
                 minimap={showMinimap}
               />
+            )}
+            {coverage?.brokerId === brokerId && !showAll && (
+              // Coverage paint handed over from the Flows view: the highlighted
+              // trail is exactly what the chosen client actually receives.
+              <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-accent-500/50 bg-accent-500/15 px-3 py-2 text-[11px] text-accent-200 backdrop-blur">
+                <span>{coverage.label}</span>
+                <button onClick={() => setCoverage(null)} title="Clear coverage highlight" className="rounded p-0.5 hover:bg-white/10">
+                  <X size={12} />
+                </button>
+              </div>
             )}
             {(graph.capped || showAll) && (
               <div className="absolute left-4 top-16 flex flex-wrap items-center gap-2">

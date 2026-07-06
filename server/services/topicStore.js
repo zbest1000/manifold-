@@ -24,6 +24,7 @@ class TopicStore {
     this.ts = new Float64Array(this.cap);
     this.flags = new Uint8Array(this.cap); // bit0 retain, bits1-2 qos
     this.payload = new Array(this.cap); // latest payload as a latin1 string
+    this.topics = new Array(this.cap); // slot -> topic (reverse of index; enables incremental consumers)
     this.dirty = new Set();
     this.maxTopics = maxTopics;
     this.total = 0;
@@ -42,6 +43,7 @@ class TopicStore {
     flags.set(this.flags);
     this.flags = flags;
     this.payload.length = nc;
+    this.topics.length = nc;
     this.cap = nc;
   }
 
@@ -57,6 +59,7 @@ class TopicStore {
       if (this.n >= this.cap) this._grow();
       slot = this.n++;
       this.index.set(topic, slot);
+      this.topics[slot] = topic; // string ref only; the string already lives as the Map key
       this.count[slot] = 0;
     }
     this.count[slot]++;
@@ -114,6 +117,11 @@ class TopicStore {
       if (topic.startsWith(prefix)) out.push(this._rowAt(topic, slot));
     }
     return out;
+  }
+
+  /** Topic string for a slot (slots are monotonic and never freed). */
+  topicAt(slot) {
+    return this.topics[slot];
   }
 
   topicCount() {

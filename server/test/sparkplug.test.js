@@ -50,3 +50,18 @@ test('non-Sparkplug topics are ignored', () => {
   r.update('factory/line1/temp', { metrics: [{ name: 'x' }] }, 1);
   assert.ok(r.isEmpty());
 });
+
+test('NDEATH cascades offline to all devices under the edge node', () => {
+  const r = new SparkplugRegistry();
+  r.update('spBv1.0/G/NBIRTH/E', null, 1);
+  r.update('spBv1.0/G/DBIRTH/E/D1', null, 2);
+  r.update('spBv1.0/G/DBIRTH/E/D2', null, 3);
+  r.update('spBv1.0/G/NDEATH/E', null, 4);
+
+  const edge = r.toJSON().groups[0].edgeNodes[0];
+  assert.strictEqual(edge.online, false);
+  for (const d of edge.devices) {
+    assert.strictEqual(d.online, false, `device ${d.id} must be offline after edge NDEATH`);
+    assert.strictEqual(d.lastDeath, 4);
+  }
+});

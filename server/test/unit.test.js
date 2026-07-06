@@ -106,3 +106,59 @@ test('discovery accepts an i3x dependency for endpoint verification', () => {
   const d = new DiscoveryService({ emit() {} }, { i3x: c });
   assert.strictEqual(typeof d.identifyI3xServer, 'function');
 });
+
+test('topicStore.topicAt survives growth and tracks slots', () => {
+  const TopicStore = require('../services/topicStore');
+  const s = new TopicStore();
+  for (let i = 0; i < 3000; i++) s.ingest(`g/t${i}`, Buffer.from('x'), 0, false); // forces _grow past 1024/2048
+  assert.strictEqual(s.topicAt(0), 'g/t0');
+  assert.strictEqual(s.topicAt(2999), 'g/t2999');
+});
+
+test('mqttManager.resolveSubscriptions is lazy, incremental, and deduped', () => {
+  const m = new MqttManager(fakeIo);
+  const TopicStore = require('../services/topicStore');
+  const brokerId = 'rb1';
+  m.connections.set(brokerId, { id: brokerId, metrics: { messagesReceived: 0, bytesReceived: 0, topicCount: 0, errors: 0 } });
+  m.stores.set(brokerId, new TopicStore());
+  const store = m.stores.get(brokerId);
+  store.ingest('plant/l1/temp', Buffer.from('1'), 0, false);
+  store.ingest('plant/l2/temp', Buffer.from('2'), 0, true);
+  store.ingest('$SYS/broker/version', Buffer.from('v'), 0, true);
+
+  // duplicate filters dedupe to one result each
+  const r1 = m.resolveSubscriptions(brokerId, ['plant/#', 'plant/#', '#']);
+  assert.strictEqual(r1.results.length, 2);
+  const plant = r1.results.find((x) => x.filter === 'plant/#');
+  assert.strictEqual(plant.matchCount, 2);
+  assert.ok(plant.sample.every((s2) => typeof s2.ts === 'number' && 'retain' in s2 && 'msgCount' in s2));
+  const all = r1.results.find((x) => x.filter === '#');
+  assert.strictEqual(all.matchCount, 2, '# must not match $SYS');
+
+  // incremental: new topics after the trie was built are picked up
+  store.ingest('plant/l3/temp', Buffer.from('3'), 0, false);
+  const r2 = m.resolveSubscriptions(brokerId, ['plant/#']);
+  assert.strictEqual(r2.results[0].matchCount, 3);
+  assert.strictEqual(r2.topicTotal, 4);
+  m.shutdown();
+});
+
+test('mqttManager.getTopicChildren returns hydrated one-level drill-down', () => {
+  const m = new MqttManager(fakeIo);
+  const TopicStore = require('../services/topicStore');
+  const brokerId = 'rb2';
+  m.connections.set(brokerId, { id: brokerId, metrics: { messagesReceived: 0, bytesReceived: 0, topicCount: 0, errors: 0 } });
+  m.stores.set(brokerId, new TopicStore());
+  const store = m.stores.get(brokerId);
+  store.ingest('f/a/x', Buffer.from('1'), 0, false);
+  store.ingest('f/a/y', Buffer.from('2'), 0, false);
+  store.ingest('f/b', Buffer.from('3'), 0, true);
+
+  const top = m.getTopicChildren(brokerId, 'f');
+  assert.deepStrictEqual(top.children.map((c) => c.segment).sort(), ['a', 'b']);
+  const b = top.children.find((c) => c.segment === 'b');
+  assert.ok(b.isTopic && b.retain === true && b.msgCount === 1);
+  const a = top.children.find((c) => c.segment === 'a');
+  assert.strictEqual(a.subtreeCount, 2);
+  m.shutdown();
+});

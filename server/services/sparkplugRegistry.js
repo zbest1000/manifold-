@@ -75,6 +75,16 @@ class SparkplugRegistry {
     } else if (type === 'NDEATH' || type === 'DDEATH') {
       target.online = false;
       target.lastDeath = ts;
+      // Sparkplug spec: an edge node's death implies ALL of its devices are
+      // offline (their data path is gone). Cascade so the topology stays honest.
+      if (type === 'NDEATH') {
+        for (const d of edge.devices.values()) {
+          if (d.online) {
+            d.online = false;
+            d.lastDeath = ts;
+          }
+        }
+      }
     }
 
     // Collect the metric names this endpoint publishes (BIRTH defines them; DATA

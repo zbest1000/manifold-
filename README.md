@@ -56,20 +56,28 @@ MCP-capable client at the included MCP server.
   force-directed arrangement server-side (Graphviz `sfdp`, up to 30k nodes) and
   renders it in the same view — the classic "network graph" look at scale, instead
   of the deterministic radial default.
-- **Sparkplug B device audit** — a "Devices" view maps the real publishing
-  endpoints of Sparkplug traffic: **Group → Edge Node → Device**, reconstructed
-  from BIRTH/DEATH certificates (`spBv1.0/…`), with live online/offline state and
-  the metric set each endpoint publishes. Real device identity, not topic strings.
-  Alongside it, a **broker `$SYS` health panel** (Mosquitto/EMQX-style) shows
-  client + subscription counts, throughput and uptime.
-  - *Subscriber audit (who subscribes to what):* MQTT decouples publishers and
-    subscribers, so the protocol and `$SYS` expose only **aggregate** counts, not a
-    per-client subscription map — only a **broker admin API** can. The Audit view's
-    **Subscribers** tab connects to an **EMQX v5 REST** endpoint (API key stored
-    server-side) and renders the real **client → subscribed-topic** graph, with
-    shared filters becoming hubs. HiveMQ / `mosquitto_ctrl` backends fit behind the
-    same switch. When no admin API is configured, the UI says so plainly rather
-    than implying it can see more than MQTT allows.
+- **Flows: producer → topic → consumer lineage** — live visibility into who
+  publishes and who receives what on a broker.
+  - *Producers* — the real publishing endpoints of Sparkplug traffic:
+    **Group → Edge Node → Device**, reconstructed from BIRTH/DEATH certificates
+    (`spBv1.0/…`), with live online/offline state (edge death cascades to its
+    devices, per spec), the metric set each endpoint publishes, and — when an
+    admin API is connected — **who consumes each endpoint's data**. Alongside it,
+    a **broker `$SYS` health panel** (clients, subscriptions, throughput, uptime).
+  - *Consumers, with wildcards resolved* — a subscription filter is a query, not
+    a destination: two clients on `spBv1.0/#` can effectively receive completely
+    different concrete topics. The Consumers tab fetches per-client subscriptions
+    from a **broker admin API** (EMQX v5 REST; key stored server-side) and
+    **resolves every filter against the actually-observed topic set** using a
+    server-side topic trie: exact match counts (never truncated), covering
+    subtree roots, and drill-down to the concrete leaf topics — with proper MQTT
+    semantics (`+`/`#` levels, root wildcards excluding `$`-topics, `$share`
+    groups). Dormant filters (matching nothing) are flagged — dead wiring is a
+    finding. A **"show coverage on topic map"** action paints exactly what a
+    client receives onto the main topic graph.
+  - *Honesty:* MQTT and `$SYS` expose only aggregate counts; per-client
+    subscriptions require the admin API, and the UI says so plainly rather than
+    implying it can see more than MQTT allows.
 - **Honest network discovery** — TCP port probing across a CIDR range, each hit
   verified with a real protocol handshake. No fabricated results.
 - **CESMII SMIP integration** — connect to a Smart Manufacturing Innovation Platform
@@ -192,6 +200,11 @@ backend.
 | `GET` | `/api/mqtt/brokers` | List broker connections |
 | `POST` | `/api/mqtt/brokers` | Connect (`{ host, port?, protocol?, username?, password? }`) |
 | `GET` | `/api/mqtt/brokers/:id/topics` | Topic list with counts |
+| `GET` | `/api/mqtt/brokers/:id/sparkplug` | Sparkplug device topology (Group → Edge → Device) |
+| `GET` | `/api/mqtt/brokers/:id/sys` | Broker `$SYS` health summary |
+| `POST` | `/api/mqtt/brokers/:id/subscriptions/resolve` | Resolve wildcard filters against observed topics (`{ filters }`) |
+| `GET` | `/api/mqtt/brokers/:id/topictree?prefix=` | One level of the observed topic tree with subtree counts |
+| `GET` | `/api/mqtt/brokers/:id/admin/pubsub?resolve=1` | Per-client subscriptions from the broker admin API, wildcard-resolved |
 | `GET` | `/api/mqtt/brokers/:id/messages?topic=` | Recent messages for a topic |
 | `POST` | `/api/mqtt/brokers/:id/publish` | Publish (`{ topic, payload, qos?, retain? }`) |
 | `POST` | `/api/opcua/connections` | Connect (`{ endpointUrl, securityMode?, ... }`) |

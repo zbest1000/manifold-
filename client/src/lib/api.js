@@ -34,7 +34,17 @@ export const api = {
   setBrokerAdmin: (id, config) =>
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin`, { method: 'POST', body: JSON.stringify(config) }),
   clearBrokerAdmin: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin`, { method: 'DELETE' }),
-  brokerAdminPubSub: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/admin/pubsub`),
+  brokerAdminPubSub: (id, { resolve = false, sampleLimit = 50 } = {}) =>
+    request(
+      `/api/mqtt/brokers/${encodeURIComponent(id)}/admin/pubsub${resolve ? `?resolve=1&sampleLimit=${sampleLimit}` : ''}`
+    ),
+  resolveSubscriptions: (id, filters, opts = {}) =>
+    request(`/api/mqtt/brokers/${encodeURIComponent(id)}/subscriptions/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ filters, ...opts })
+    }),
+  topicTree: (id, prefix = '', limit = 500) =>
+    request(`/api/mqtt/brokers/${encodeURIComponent(id)}/topictree?prefix=${encodeURIComponent(prefix)}&limit=${limit}`),
   subscribe: (id, topic, qos = 0) =>
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}/subscribe`, {
       method: 'POST',

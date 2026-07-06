@@ -3,23 +3,27 @@ import { Cpu, Radio, Activity, Users, Info, CircleDot, CircleOff } from 'lucide-
 import { api } from '@/lib/api';
 import { useStore } from '@/store/store';
 import { buildSparkplugGraph } from '@/graph/buildGraph';
+import { topicMatches } from '@/lib/mqtt';
 import ForceGraph from '@/graph/ForceGraph';
 import { Card, Badge, EmptyState } from '@/components/ui';
 import { formatDistanceToNow } from 'date-fns';
 
 /**
- * Audit view: who is actually publishing on this broker, and broker health.
+ * Producers: who is actually publishing on this broker, and broker health.
  *
  * - Sparkplug B device topology (Group → Edge Node → Device) built from observed
  *   BIRTH/DEATH certificates — REAL publishing endpoints with live online state
  *   and each endpoint's metric set.
  * - Broker `$SYS` health / throughput / client + subscription counts.
- * - An honest note about what MQTT can and cannot reveal about subscribers.
+ * - When a broker admin API is configured (Consumers tab), each endpoint also
+ *   shows WHO CONSUMES its data: the client subscriptions reverse-matched
+ *   against the endpoint's actual Sparkplug topics.
  */
-export default function SparkplugAudit({ broker }) {
+export default function ProducerFlows({ broker }) {
   const graphStyle = useStore((s) => s.graphStyle);
   const [topology, setTopology] = useState(null);
   const [sys, setSys] = useState(null);
+  const [pubsub, setPubsub] = useState(null); // for reverse "consumed by" lookups
   const [selected, setSelected] = useState(null);
   const graphRef = useRef(null);
 
@@ -38,11 +42,34 @@ export default function SparkplugAudit({ broker }) {
     };
     poll();
     const t = setInterval(poll, 3000);
+    // Subscriptions for reverse-matching (once; cheap, no resolution needed).
+    api
+      .brokerAdminPubSub(broker.id)
+      .then((r) => alive && setPubsub(r))
+      .catch(() => {});
     return () => {
       alive = false;
       clearInterval(t);
     };
   }, [broker?.id]);
+
+  // "Consumed by": which clients' filters match this endpoint's data topics?
+  const consumersOf = (node) => {
+    if (!pubsub?.configured || !pubsub.subscriptions?.length) return null;
+    // Node ids: sp:{broker}:e:{group}/{edge} | sp:{broker}:d:{group}/{edge}/{device...}
+    const m = /^sp:[^:]+:(e|d):(.+)$/.exec(node.id);
+    if (!m) return null;
+    const segs = m[2].split('/');
+    const topics =
+      m[1] === 'e'
+        ? [`spBv1.0/${segs[0]}/NDATA/${segs[1]}`, `spBv1.0/${segs[0]}/NBIRTH/${segs[1]}`]
+        : [`spBv1.0/${segs[0]}/DDATA/${segs[1]}/${segs.slice(2).join('/')}`, `spBv1.0/${segs[0]}/DBIRTH/${segs[1]}/${segs.slice(2).join('/')}`];
+    const clients = new Set();
+    for (const s of pubsub.subscriptions) {
+      if (topics.some((t2) => topicMatches(s.topic, t2))) clients.add(s.clientId);
+    }
+    return [...clients];
+  };
 
   const graph = useMemo(
     () => (topology && broker ? buildSparkplugGraph(broker, topology) : { nodes: [], links: [] }),
@@ -135,6 +162,28 @@ export default function SparkplugAudit({ broker }) {
                 </div>
               </div>
             )}
+            {(() => {
+              const consumers = consumersOf(selectedNode);
+              if (consumers === null) return null;
+              return (
+                <div className="mt-2">
+                  <p className="mb-1 text-[11px] font-medium text-slate-400">
+                    Consumed by {consumers.length} client{consumers.length === 1 ? '' : 's'}
+                  </p>
+                  {consumers.length ? (
+                    <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-lg bg-black/20 p-2 font-mono text-[11px] text-slate-300">
+                      {consumers.map((c) => (
+                        <div key={c} className="truncate">
+                          {c}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg bg-black/20 p-2 text-[11px] text-slate-500">No subscription currently covers this endpoint&apos;s topics.</p>
+                  )}
+                </div>
+              );
+            })()}
           </Card>
         )}
 
@@ -166,7 +215,7 @@ export default function SparkplugAudit({ broker }) {
             <Info size={15} /> Who subscribes to what?
           </div>
           <p className="text-[11px] leading-relaxed text-slate-400">
-            MQTT decouples publishers and subscribers — the protocol (and <code>$SYS</code>) expose only <strong>aggregate</strong> client and subscription <em>counts</em>, not a per-client subscription map. This tab shows <strong>who publishes what</strong> (the Sparkplug device tree + every published topic). For <strong>who subscribes to what</strong>, open the <strong>Subscribers</strong> tab and connect a broker admin API (EMQX / HiveMQ REST, or <code>mosquitto_ctrl</code>) — the only source that can reveal per-client subscriptions.
+            MQTT decouples publishers and subscribers — the protocol (and <code>$SYS</code>) expose only <strong>aggregate</strong> client and subscription <em>counts</em>, not a per-client subscription map. This tab shows <strong>who publishes what</strong> (the Sparkplug device tree + every published topic). For <strong>who receives what</strong>, open the <strong>Consumers</strong> tab and connect a broker admin API — subscriptions are then resolved against the observed topics, all the way down to concrete leaves.
           </p>
         </Card>
       </div>

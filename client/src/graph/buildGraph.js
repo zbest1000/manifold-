@@ -276,11 +276,165 @@ export function buildSparkplugGraph(broker, topology) {
 }
 
 /**
- * Build a pub/sub audit graph from a broker admin API: Broker → Client → the
- * topic filters that client SUBSCRIBES to. This is the one view that answers "who
- * subscribes to what" — sourced from the broker's admin API, not observed traffic.
- * Topic-filter nodes are shared, so a filter many clients subscribe to becomes a
- * visible hub.
+ * Build a wildcard-RESOLVED consumer lineage graph:
+ *
+ *   Broker → Client → Filter (with exact match count) → matched subtree ROOTS
+ *          → (lazily expanded) topic hierarchy → concrete leaf topics
+ *
+ * A filter is a query, not a destination — `spBv1.0/#` from two clients can
+ * cover completely different concrete topics. `resolution.byFilter` (from the
+ * server trie) supplies exact matchCounts + covering roots per filter, so shared
+ * filters remain visible hubs but no longer HIDE what each actually receives.
+ * `expanded` is a Map(path -> children[]) from /topictree, so leaves appear only
+ * where the user drills in; children beyond the budget roll into collapsedCount
+ * ("+N") badges. Filters that match nothing are flagged (group 'alarm') —
+ * dormant subscriptions are an audit finding, not noise.
+ */
+export function buildLineageGraph(broker, { clients = [], subscriptions = [] }, resolution = null, expanded = null) {
+  const nodes = new Map();
+  const links = [];
+  const rootId = `ps:${broker.id}:root`;
+  nodes.set(rootId, {
+    id: rootId,
+    label: broker.name || `${broker.host}:${broker.port}`,
+    group: 'broker',
+    kind: 'broker',
+    degree: 0,
+    meta: { brokerId: broker.id }
+  });
+
+  for (const c of clients) {
+    const id = `ps:${broker.id}:c:${c.id}`;
+    nodes.set(id, {
+      id,
+      label: c.id,
+      group: c.connected ? 'telemetry' : 'alarm',
+      kind: 'mqtt-client',
+      degree: 0,
+      meta: { kind: 'client', username: c.username, ip: c.ip, connected: c.connected, subscriptionsCount: c.subscriptionsCount }
+    });
+    links.push({ source: rootId, target: id });
+  }
+
+  // Filter nodes (shared across clients — fan-out is real signal).
+  const byFilter = resolution?.byFilter || {};
+  const filterIds = new Map(); // filter -> node id
+  for (const s of subscriptions) {
+    const clientNode = `ps:${broker.id}:c:${s.clientId}`;
+    if (!nodes.has(clientNode)) {
+      nodes.set(clientNode, {
+        id: clientNode,
+        label: s.clientId,
+        group: 'telemetry',
+        kind: 'mqtt-client',
+        degree: 0,
+        meta: { kind: 'client' }
+      });
+      links.push({ source: rootId, target: clientNode });
+    }
+    let fid = filterIds.get(s.topic);
+    if (!fid) {
+      fid = `ps:${broker.id}:f:${s.topic}`;
+      filterIds.set(s.topic, fid);
+      const r = byFilter[s.topic];
+      const dormant = r ? r.matchCount === 0 : false;
+      nodes.set(fid, {
+        id: fid,
+        label: r ? `${s.topic}  ·  ${r.matchCount.toLocaleString()}` : s.topic,
+        group: dormant ? 'alarm' : 'topic',
+        kind: 'sub-filter',
+        degree: 0,
+        meta: {
+          kind: 'filter',
+          topic: s.topic,
+          matchCount: r?.matchCount ?? null,
+          dormant,
+          share: r?.share || null,
+          roots: r?.roots || [],
+          rootsTruncated: r?.rootsTruncated || false,
+          sample: r?.sample || [],
+          sampleTruncated: r?.sampleTruncated || false
+        }
+      });
+    }
+    links.push({ source: clientNode, target: fid, kind: 'subscribe' });
+  }
+
+  // Covering-root aggregates under each resolved filter: `spBv1.0/#` links to a
+  // `spBv1.0 (15,234)` aggregate instead of an opaque hub — expandable to leaves.
+  const aggIds = new Map(); // path -> node id (shared across filters covering the same subtree)
+  const ensureAgg = (path, count, isLeaf) => {
+    let id = aggIds.get(path);
+    if (id) return id;
+    id = `ps:${broker.id}:t:${path}`;
+    aggIds.set(path, id);
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        id,
+        label: isLeaf ? path.split('/').pop() : `${path.split('/').pop()} · ${count.toLocaleString()}`,
+        group: isLeaf ? 'data' : 'config',
+        kind: isLeaf ? 'topic-leaf' : 'topic-agg',
+        degree: 0,
+        collapsedCount: !isLeaf && !expanded?.has(path) ? count : 0,
+        meta: { kind: isLeaf ? 'topic' : 'aggregate', path, subtreeCount: count, expandable: !isLeaf }
+      });
+    }
+    return id;
+  };
+
+  for (const [filter, fid] of filterIds) {
+    const r = byFilter[filter];
+    if (!r) continue;
+    for (const root of r.roots) {
+      const aggId = ensureAgg(root.prefix, root.count, root.isLeaf);
+      links.push({ source: fid, target: aggId, kind: 'resolves' });
+    }
+  }
+
+  // Lazily expanded levels: children fetched from /topictree appear under their
+  // parent aggregate, leaves as concrete topics.
+  if (expanded) {
+    for (const [path, children] of expanded) {
+      const parentId = aggIds.get(path) || `ps:${broker.id}:t:${path}`;
+      if (!nodes.has(parentId)) continue;
+      nodes.get(parentId).collapsedCount = 0;
+      for (const child of children) {
+        const childId = ensureAgg(child.path, child.subtreeCount, child.isTopic && child.subtreeCount === 1);
+        links.push({ source: parentId, target: childId, kind: 'topic' });
+      }
+    }
+  }
+
+  computeDegree(nodes, links);
+  return { nodes: Array.from(nodes.values()), links };
+}
+
+/**
+ * Turn a set of resolved filters into matchIds for coverage paint on the real
+ * topic-hierarchy graph (buildMqttGraph id scheme: `topic:${brokerId}:${path}`).
+ * Includes every ancestor of each matched path so the painted trail runs from
+ * the broker all the way down to the leaves the client actually receives.
+ */
+export function coverageToMatchIds(brokerId, results) {
+  const ids = new Set();
+  const addWithAncestors = (path) => {
+    const segs = path.split('/').filter(Boolean);
+    let acc = '';
+    for (let i = 0; i < segs.length; i++) {
+      acc = i === 0 ? segs[i] : `${acc}/${segs[i]}`;
+      ids.add(`topic:${brokerId}:${acc}`);
+    }
+  };
+  for (const r of results || []) {
+    for (const root of r.roots || []) addWithAncestors(root.prefix);
+    for (const s of r.sample || []) addWithAncestors(s.topic);
+  }
+  return ids;
+}
+
+/**
+ * (Legacy) flat pub/sub graph: Broker → Client → literal filter strings. Kept for
+ * reference; the Flows view uses buildLineageGraph, which resolves wildcards.
  */
 export function buildPubSubGraph(broker, { clients = [], subscriptions = [] }) {
   const nodes = new Map();

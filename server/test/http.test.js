@@ -112,3 +112,13 @@ test('POST /api/layout rejects an unknown engine', async () => {
   assert.strictEqual(status, 400);
   assert.match(body.error, /unknown layout engine/);
 });
+
+test('POST /subscriptions/resolve validates filters and 404s unknown brokers', async () => {
+  const r404 = await post('/api/mqtt/brokers/nope/subscriptions/resolve', { filters: ['#'] });
+  assert.strictEqual(r404.status, 404);
+});
+
+test('GET /topictree 404s unknown brokers', async () => {
+  const res = await fetch(`${baseUrl}/api/mqtt/brokers/nope/topictree`);
+  assert.strictEqual(res.status, 404);
+});

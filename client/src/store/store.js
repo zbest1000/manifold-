@@ -62,6 +62,11 @@ export const useStore = create((set, get) => ({
   showValues: localStorage.getItem('tc.showValues') !== 'false',
   showMinimap: localStorage.getItem('tc.showMinimap') === 'true',
 
+  // Cross-view coverage paint: set by the Flows view ("show on topic map"),
+  // consumed by the Topics graph as matchIds. Session-only, not persisted.
+  coverage: null, // { brokerId, matchIds: Set, label }
+  setCoverage: (coverage) => set({ coverage }),
+
   setGraphStyle: (id) => {
     localStorage.setItem('tc.graphStyle', id);
     set({ graphStyle: id });
