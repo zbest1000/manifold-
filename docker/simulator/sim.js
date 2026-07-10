@@ -151,12 +151,23 @@ function deviceData() {
 console.log(`simulator: connecting to ${URL}`);
 const client = mqtt.connect(URL, { reconnectPeriod: 3000, clientId: `tc-sim-${Date.now()}` });
 
+// Publish BIRTH certificates. Retained so any late-joining subscriber gets the
+// topology + metric name↔alias map immediately, and re-sent periodically so a
+// consumer that connects mid-stream (or a registry that lost state) self-heals.
+function sendBirths() {
+  if (!client.connected) return;
+  seq = 0; // NBIRTH resets the sequence
+  client.publish(`spBv1.0/${GROUP}/NBIRTH/${EDGE}`, nodeBirth(), { retain: true });
+  client.publish(`spBv1.0/${GROUP}/DBIRTH/${EDGE}/${DEVICE}`, deviceBirth(), { retain: true });
+}
+
 client.on('connect', () => {
   console.log('simulator: connected — publishing BIRTH certificates');
-  seq = 0;
-  client.publish(`spBv1.0/${GROUP}/NBIRTH/${EDGE}`, nodeBirth());
-  client.publish(`spBv1.0/${GROUP}/DBIRTH/${EDGE}/${DEVICE}`, deviceBirth());
+  sendBirths();
 });
+
+// Periodic re-birth so a late-joining app always sees the device come online.
+setInterval(sendBirths, 20000);
 
 client.on('error', (err) => console.error('simulator: mqtt error:', err.message));
 client.on('reconnect', () => console.log('simulator: reconnecting…'));
