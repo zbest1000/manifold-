@@ -128,7 +128,11 @@ class SparkplugDecoder {
         }
       `;
 
-      this.root = protobuf.parse(protoSchema).root;
+      // keepCase keeps proto field names snake_case (float_value, is_historical,
+      // num_of_columns, ...) to match how the extractors below read them. Without
+      // it protobufjs camelCases the names and every metric value / dataset /
+      // template / historical flag silently decodes to null/undefined.
+      this.root = protobuf.parse(protoSchema, { keepCase: true }).root;
       this.Payload = this.root.lookupType('Payload');
       
       console.log('✅ Sparkplug B protobuf schema initialized');

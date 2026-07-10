@@ -1,0 +1,12 @@
+# Keep the build context small and reproducible.
+**/node_modules
+client/dist
+server/data
+pr2-worktree
+.git
+.github
+*.log
+npm-debug.log*
+.DS_Store
+.vscode
+.idea

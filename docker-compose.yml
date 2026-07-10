@@ -1,0 +1,76 @@
+# Topic Canvas — full local test stack.
+#
+#   docker compose up --build
+#   → open http://localhost:5000
+#
+# Brings up the app plus a Mosquitto MQTT broker, a Microsoft OPC-PLC OPC UA
+# server, and a data simulator. The app is pre-seeded to auto-connect to the
+# broker and OPC UA server, and the simulator publishes MQTT + Sparkplug B
+# traffic, so every view has live data immediately.
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: tc-mqtt
+    hostname: mqtt
+    restart: unless-stopped
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883" # MQTT (connect external clients here too)
+      - "9001:9001" # MQTT over WebSockets
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
+  opcua:
+    image: mcr.microsoft.com/iotedge/opc-plc:latest
+    container_name: tc-opcua
+    hostname: opcua
+    restart: unless-stopped
+    command:
+      - "--pn=50000"            # listen on :50000
+      - "--autoaccept"          # auto-accept client certs (test only)
+      - "--unsecuretransport"   # expose a None-security endpoint
+      - "--sph"                 # show simulator node info on startup
+    ports:
+      - "50000:50000" # OPC UA (opc.tcp://localhost:50000)
+
+  simulator:
+    build:
+      context: ./docker/simulator
+    container_name: tc-simulator
+    restart: unless-stopped
+    environment:
+      MQTT_URL: mqtt://mqtt:1883
+      TICK_MS: "1500"
+    depends_on:
+      mqtt:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    container_name: tc-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      TC_DATA_DIR: /data
+      # TC_AUTH_TOKEN: set-a-secret-to-require-auth
+    volumes:
+      - app-data:/data # persists connection profiles across restarts
+    ports:
+      - "5000:5000" # open http://localhost:5000
+    depends_on:
+      mqtt:
+        condition: service_healthy
+      opcua:
+        condition: service_started
+
+volumes:
+  app-data:

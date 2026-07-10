@@ -1,0 +1,27 @@
+{
+  "mqtt": {
+    "demo-mqtt": {
+      "config": {
+        "id": "demo-mqtt",
+        "name": "Demo Mosquitto",
+        "host": "mqtt",
+        "port": 1883,
+        "protocol": "mqtt",
+        "autoSubscribe": true,
+        "reconnect": true,
+        "reconnectPeriod": 5000
+      }
+    }
+  },
+  "opcua": {
+    "demo-opcua": {
+      "id": "demo-opcua",
+      "name": "Demo OPC-PLC",
+      "endpointUrl": "opc.tcp://opcua:50000",
+      "securityMode": "None",
+      "securityPolicy": "None"
+    }
+  },
+  "cesmii": null,
+  "i3x": null
+}
