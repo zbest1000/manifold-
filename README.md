@@ -368,7 +368,7 @@ delivered over Socket.IO.
   ```
 
 - **GitHub Actions** (`.github/workflows/ci.yml`) runs on every push and PR to
-  `main`: server tests on Node 20/22, client tests + production build, and an
+  `main`: server tests on Node 22, client tests + production build, and an
   MCP server load check.
 
 ---

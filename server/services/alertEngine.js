@@ -36,6 +36,8 @@ class AlertEngine {
     this.state = new Map(); // ruleId -> { firing, since, watermark }
     this.history = []; // bounded ring, newest last
     this.timer = null;
+    this.webhookFailures = 0;
+    this.lastWebhookError = null;
   }
 
   start() {
@@ -145,13 +147,17 @@ class AlertEngine {
     this.io?.emit('alert', evt);
     if (rule.webhookUrl && typeof this.fetchImpl === 'function') {
       const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(WEBHOOK_TIMEOUT_MS) : undefined;
+      // Failures are recorded, not console-logged: this fires from an async
+      // callback, and stray console writes from library code are noise in the
+      // server log and poison in test-runner child processes.
       this.fetchImpl(rule.webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(evt),
         signal
       }).catch((error) => {
-        console.warn(`alertEngine: webhook for rule ${rule.id} failed: ${error.message}`);
+        this.webhookFailures++;
+        this.lastWebhookError = `rule ${rule.id}: ${error.message}`;
       });
     }
   }

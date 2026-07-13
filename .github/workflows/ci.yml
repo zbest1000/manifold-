@@ -12,9 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # node-opcua pulls in ESM-only deps that require Node's require(ESM)
-        # support (Node 20.19+/22+), so Node 18 is not supported.
-        node-version: [20.x, 22.x]
+        # Node 22 LTS only. Node 18 lacks the require(ESM) support node-opcua
+        # needs; Node 20 reached end-of-life in April 2026 and its test runner
+        # has an IPC bug ("Unable to deserialize cloned data") that fails whole
+        # files at random — an EOL runtime isn't worth flaky signal.
+        node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
