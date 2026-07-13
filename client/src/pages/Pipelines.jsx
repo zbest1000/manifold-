@@ -506,7 +506,7 @@ function ModelsTab({ brokers }) {
 function HistoriansTab() {
   const [data, setData] = useState({ historians: [], types: [] });
   const [outbox, setOutbox] = useState({});
-  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', writePath: '', apiKey: '' });
+  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', stream: '', messageType: '', writePath: '', apiKey: '', apiSecret: '' });
   const [testing, setTesting] = useState(null); // id -> result
   const load = useCallback(() => api.listHistorians().then(setData).catch(() => {}), []);
   useEffect(() => {
@@ -547,7 +547,9 @@ function HistoriansTab() {
               </div>
               <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
                 {h.url}
-                {h.type === 'influxdb' ? ` · org=${h.org} bucket=${h.bucket}` : ` · dataset=${h.dataset}`}
+                {h.type === 'influxdb' && ` · org=${h.org} bucket=${h.bucket}`}
+                {h.type === 'timebase' && ` · dataset=${h.dataset}`}
+                {h.type === 'timebase-ce' && ` · stream=${h.stream}`}
               </p>
               {outbox[h.id] && (
                 <p className="mt-0.5 text-[11px]">
@@ -587,16 +589,23 @@ function HistoriansTab() {
           <Field label="Type">
             <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200">
               <option value="influxdb">InfluxDB v2</option>
-              <option value="timebase">Timebase</option>
+              <option value="timebase">Timebase historian (Flow Software)</option>
+              <option value="timebase-ce">TimeBase CE (FINOS, WS gateway)</option>
             </select>
           </Field>
           <Field label="Name">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="plant historian" />
           </Field>
           <Field label="URL" className="col-span-2">
-            <Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder={form.type === 'influxdb' ? 'http://influx-host:8086' : 'http://historian-host:4511'} />
+            <Input
+              value={form.url}
+              onChange={(e) => setForm({ ...form, url: e.target.value })}
+              placeholder={
+                form.type === 'influxdb' ? 'http://influx-host:8086' : form.type === 'timebase-ce' ? 'http://gateway-host:8099' : 'http://historian-host:4511'
+              }
+            />
           </Field>
-          {form.type === 'influxdb' ? (
+          {form.type === 'influxdb' && (
             <>
               <Field label="Org">
                 <Input value={form.org} onChange={(e) => setForm({ ...form, org: e.target.value })} />
@@ -611,7 +620,8 @@ function HistoriansTab() {
                 <Input value={form.measurement} onChange={(e) => setForm({ ...form, measurement: e.target.value })} placeholder="manifold" />
               </Field>
             </>
-          ) : (
+          )}
+          {form.type === 'timebase' && (
             <>
               <Field label="Dataset">
                 <Input value={form.dataset} onChange={(e) => setForm({ ...form, dataset: e.target.value })} placeholder="Manifold" />
@@ -624,6 +634,22 @@ function HistoriansTab() {
               </Field>
             </>
           )}
+          {form.type === 'timebase-ce' && (
+            <>
+              <Field label="Stream">
+                <Input value={form.stream} onChange={(e) => setForm({ ...form, stream: e.target.value })} placeholder="manifold" />
+              </Field>
+              <Field label="Message $type (optional)">
+                <Input value={form.messageType} onChange={(e) => setForm({ ...form, messageType: e.target.value })} placeholder="ManifoldSample" />
+              </Field>
+              <Field label="API key (optional)">
+                <Input value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
+              </Field>
+              <Field label="API secret (optional)">
+                <Input type="password" value={form.apiSecret} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} />
+              </Field>
+            </>
+          )}
         </div>
         {form.type === 'timebase' && (
           <p className="mt-2 text-[11px] leading-snug text-slate-500">
@@ -632,7 +658,24 @@ function HistoriansTab() {
             at this broker, or at a pipeline's output namespace, is an equally good path.
           </p>
         )}
-        <Button className="mt-3" onClick={save} disabled={!form.url || (form.type === 'influxdb' ? !form.org || !form.bucket : !form.dataset)}>
+        {form.type === 'timebase-ce' && (
+          <p className="mt-2 text-[11px] leading-snug text-slate-500">
+            Writes JSON rows to the TimebaseWS gateway (default <span className="mono">:8099/api/v0/&lt;stream&gt;/write</span>) as
+            {' {$type, symbol, timestamp, value, quality}'} — symbol = tag path. Leave keys empty for unauthenticated CE
+            quickstarts; with keys, requests are Deltix HMAC-SHA384 signed. Confirm the write path on your gateway's
+            Swagger if the version differs.
+          </p>
+        )}
+        <Button
+          className="mt-3"
+          onClick={save}
+          disabled={
+            !form.url ||
+            (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
+            (form.type === 'timebase' && !form.dataset) ||
+            (form.type === 'timebase-ce' && !form.stream)
+          }
+        >
           <Plus size={14} className="mr-1" /> Add historian
         </Button>
       </Card>

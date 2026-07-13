@@ -115,6 +115,16 @@ export default function Uns() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mountTick, opcua.map((c) => c.id).join('|')]);
 
+  // Mounted structure is a snapshot — refresh it periodically while mounts
+  // exist (and on demand from the Mounts panel) so grafted trees don't rot.
+  useEffect(() => {
+    if (!mounts.length) return undefined;
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') setMountTick((v) => v + 1);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [mounts.length]);
+
   const scoped = scope === 'all' ? connected : connected.filter((b) => b.id === scope);
   // Rebuild namespace trees only when the topic SET changes on a scoped broker.
   const versionKey = scoped.map((b) => `${b.id}:${topicVersionMap[b.id] || 0}`).join('|');
@@ -467,9 +477,18 @@ function MountManager({ mounts, opcua, i3xStatus, onChanged, onClose }) {
     <div className="absolute right-4 top-4 z-20 w-80 rounded-xl border border-white/10 bg-surface-900/95 p-3 shadow-xl backdrop-blur">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm font-semibold text-slate-100">Mounted sources</span>
-        <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-white/10">
-          <X size={14} />
-        </button>
+        <span className="flex items-center gap-1">
+          <button
+            onClick={onChanged}
+            title="Re-browse mounted sources now (also refreshes every 60s)"
+            className="rounded px-1.5 py-0.5 text-[11px] text-accent-300 hover:bg-white/10"
+          >
+            Refresh
+          </button>
+          <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-white/10">
+            <X size={14} />
+          </button>
+        </span>
       </div>
       <p className="mb-2 text-[11px] text-slate-500">
         Graft OPC UA address spaces and the i3X object graph into the namespace forest. Structure only — mounted nodes

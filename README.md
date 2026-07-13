@@ -129,7 +129,10 @@ MCP-capable client at the included MCP server.
   Ten raw topics become one `Pump-7`.
 - **Historian integrations** — first-class time-series targets for pipelines
   and the recorder: **InfluxDB v2** (line-protocol writes with proper
-  escaping/typing, token auth) and **Timebase historian** (TVQ writes into a
+  escaping/typing, token auth), **FINOS TimeBase CE** (JSON rows via the
+  TimebaseWS gateway on `:8099` — `{$type, symbol, timestamp, value, quality}`
+  with optional Deltix HMAC-SHA384 API-key signing; write path overridable per
+  gateway version), and **Timebase historian** (TVQ writes into a
   dataset via its public REST API on `:4511`; datasets auto-create, and the
   write path is confirmable/overridable against your instance's own Swagger at
   `:4511/api/help`). Timebase also ingests MQTT/Sparkplug natively, so pointing
@@ -416,8 +419,13 @@ delivered over Socket.IO.
   ```
 
 - **GitHub Actions** (`.github/workflows/ci.yml`) runs on every push and PR to
-  `main`: server tests on Node 22, client tests + production build, and an
-  MCP server load check.
+  `main`: server tests on Node 22, client tests + production build, an MCP
+  server load check, and an **integration job with real service containers**
+  (EMQX 5 + InfluxDB 2) that connects the actual manager to the actual broker
+  and queries written points back out of the actual database. A perf-smoke
+  suite enforces order-of-magnitude floors on the hot path (200k ingests,
+  trie build, 50k pipeline dispatches), and a restart-survival test proves
+  DataOps config persists and re-compiles on boot.
 
 ---
 
