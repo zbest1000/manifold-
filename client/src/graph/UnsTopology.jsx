@@ -168,6 +168,14 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
 
   useEffect(() => {
     visibleRef.current = layout.nodes;
+    // Read-only hook for e2e tests / screenshot tooling: world coordinates of
+    // the visible nodes plus the current view transform.
+    if (typeof window !== 'undefined') {
+      window.__unsLayout = {
+        transform: transformRef.current,
+        nodes: layout.nodes.map((l) => ({ name: l.node.name, path: l.node.path, x: l.x, y: l.y, open: l.open, hasKids: l.hasKids, depth: l.node.depth }))
+      };
+    }
   }, [layout]);
 
   // ---- Drawing ----
