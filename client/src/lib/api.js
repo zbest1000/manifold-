@@ -85,6 +85,43 @@ export const api = {
   addMount: (mount) => request('/api/uns/mounts', { method: 'POST', body: JSON.stringify(mount) }),
   removeMount: (id) => request(`/api/uns/mounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // Historians (InfluxDB / Timebase)
+  listHistorians: () => request('/api/historians'),
+  saveHistorian: (h) => request('/api/historians', { method: 'POST', body: JSON.stringify(h) }),
+  deleteHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+
+  // Pipelines
+  listPipelines: () => request('/api/pipelines'),
+  savePipeline: (route) => request('/api/pipelines', { method: 'POST', body: JSON.stringify(route) }),
+  deletePipeline: (id) => request(`/api/pipelines/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  previewPipeline: (route, sampleLimit = 25) =>
+    request('/api/pipelines/preview', { method: 'POST', body: JSON.stringify({ route, sampleLimit }) }),
+
+  // Recorder + replay
+  listRecordings: () => request('/api/recorder'),
+  saveRecording: (rec) => request('/api/recorder', { method: 'POST', body: JSON.stringify(rec) }),
+  deleteRecording: (id) => request(`/api/recorder/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  recordingData: (id, params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/api/recorder/${encodeURIComponent(id)}/data${q ? `?${q}` : ''}`);
+  },
+  startReplay: (body) => request('/api/recorder/replay', { method: 'POST', body: JSON.stringify(body) }),
+  stopReplay: () => request('/api/recorder/replay', { method: 'DELETE' }),
+
+  // Schema contracts
+  listContracts: () => request('/api/contracts'),
+  inferContract: (brokerId, topic) =>
+    request('/api/contracts/infer', { method: 'POST', body: JSON.stringify({ brokerId, topic }) }),
+  saveContract: (c) => request('/api/contracts', { method: 'POST', body: JSON.stringify(c) }),
+  deleteContract: (id) => request(`/api/contracts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  contractViolations: (limit = 200) => request(`/api/contracts/violations?limit=${limit}`),
+
+  // Models
+  listModels: () => request('/api/models'),
+  saveModel: (m) => request('/api/models', { method: 'POST', body: JSON.stringify(m) }),
+  deleteModel: (id) => request(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // Alerts
   listAlertRules: () => request('/api/alerts/rules'),
   saveAlertRule: (rule) => request('/api/alerts/rules', { method: 'POST', body: JSON.stringify(rule) }),

@@ -9,6 +9,7 @@ import Cesmii from './pages/Cesmii';
 import I3x from './pages/I3x';
 import Flows from './pages/Flows';
 import Uns from './pages/Uns';
+import Pipelines from './pages/Pipelines';
 import Discovery from './pages/Discovery';
 import Settings from './pages/Settings';
 
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="i3x" element={<I3x />} />
         <Route path="flows" element={<Flows />} />
         <Route path="uns" element={<Uns />} />
+        <Route path="pipelines" element={<Pipelines />} />
         <Route path="discovery" element={<Discovery />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />

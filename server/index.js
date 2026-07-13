@@ -14,6 +14,11 @@ const I3xClient = require('./services/i3xClient');
 const ProfileStore = require('./services/profileStore');
 const HistoryStore = require('./services/historyStore');
 const { AlertEngine } = require('./services/alertEngine');
+const { PipelineEngine } = require('./services/pipelineEngine');
+const Recorder = require('./services/recorder');
+const Replayer = require('./services/replayer');
+const { SchemaContracts } = require('./services/schemaContracts');
+const ModelEngine = require('./services/modelEngine');
 
 const mqttRoutes = require('./routes/mqtt');
 const opcuaRoutes = require('./routes/opcua');
@@ -23,6 +28,11 @@ const i3xRoutes = require('./routes/i3x');
 const layoutRoutes = require('./routes/layout');
 const unsRoutes = require('./routes/uns');
 const alertRoutes = require('./routes/alerts');
+const historianRoutes = require('./routes/historians');
+const pipelineRoutes = require('./routes/pipelines');
+const recorderRoutes = require('./routes/recorder');
+const contractRoutes = require('./routes/contracts');
+const modelRoutes = require('./routes/models');
 
 const app = express();
 const server = http.createServer(app);
@@ -71,8 +81,16 @@ const cesmii = new CesmiiClient();
 const profiles = new ProfileStore();
 const history = new HistoryStore(mqttManager);
 const alerts = new AlertEngine({ io, profiles, mqttManager });
+const pipelines = new PipelineEngine({ mqttManager, profiles });
+const recorder = new Recorder({ mqttManager, profiles });
+const replayer = new Replayer({ mqttManager, recorder });
+const contracts = new SchemaContracts({ mqttManager, profiles, io });
+const models = new ModelEngine({ mqttManager, profiles });
 
-app.locals.services = { mqttManager, opcuaManager, discovery, cesmii, i3x, profiles, history, alerts };
+app.locals.services = {
+  mqttManager, opcuaManager, discovery, cesmii, i3x, profiles, history, alerts,
+  pipelines, recorder, replayer, contracts, models
+};
 
 // Restore saved connection profiles so a server restart doesn't lose state.
 // Every restore is individually try/caught: an unreachable broker must not stop
@@ -111,6 +129,10 @@ if (process.env.TC_NO_RESTORE !== '1') {
 }
 history.start();
 alerts.start();
+pipelines.start();
+recorder.start();
+contracts.start();
+models.start();
 
 app.use('/api/mqtt', mqttRoutes);
 app.use('/api/opcua', opcuaRoutes);
@@ -120,6 +142,11 @@ app.use('/api/i3x', i3xRoutes);
 app.use('/api/layout', layoutRoutes);
 app.use('/api/uns', unsRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/historians', historianRoutes);
+app.use('/api/pipelines', pipelineRoutes);
+app.use('/api/recorder', recorderRoutes);
+app.use('/api/contracts', contractRoutes);
+app.use('/api/models', modelRoutes);
 
 app.get('/health', (req, res) => {
   res.json({
@@ -230,6 +257,13 @@ const shutdown = async () => {
   history.snapshot(); // final flush before rings are torn down
   history.stop();
   alerts.stop();
+  await pipelines.flushHistorians().catch(() => {});
+  pipelines.stop();
+  await recorder.flushHistorians().catch(() => {});
+  recorder.stop();
+  replayer.stop();
+  contracts.stop();
+  models.stop();
   mqttManager.shutdown();
   await opcuaManager.shutdown();
   server.close(() => process.exit(0));

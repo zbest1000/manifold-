@@ -3,6 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 
+// DataOps collections stored alongside connection profiles. Generic CRUD keeps
+// the store from growing three near-identical method triples per module.
+const COLLECTIONS = ['historians', 'pipelines', 'models', 'recordings', 'contracts'];
+function emptyCollections() {
+  return Object.fromEntries(COLLECTIONS.map((c) => [c, {}]));
+}
+
 /**
  * Connection-profile persistence: saved brokers, OPC UA endpoints, CESMII / i3X
  * configs, and per-broker admin API configs survive a server restart.
@@ -23,7 +30,7 @@ class ProfileStore {
   constructor(dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data')) {
     this.dir = dir;
     this.file = path.join(dir, 'profiles.json');
-    this.data = { mqtt: {}, opcua: {}, cesmii: null, i3x: null, mounts: {}, alertRules: {} };
+    this.data = { mqtt: {}, opcua: {}, cesmii: null, i3x: null, mounts: {}, alertRules: {}, ...emptyCollections() };
     this._load();
   }
 
@@ -37,7 +44,8 @@ class ProfileStore {
         cesmii: parsed.cesmii || null,
         i3x: parsed.i3x || null,
         mounts: parsed.mounts || {},
-        alertRules: parsed.alertRules || {}
+        alertRules: parsed.alertRules || {},
+        ...Object.fromEntries(COLLECTIONS.map((c) => [c, parsed[c] || {}]))
       };
     } catch {
       // no file yet, or unreadable/corrupt — start clean, don't crash the server
@@ -161,6 +169,34 @@ class ProfileStore {
 
   alertRules() {
     return Object.values(this.data.alertRules);
+  }
+
+  // ---- generic DataOps collections (historians, pipelines, models, ...) ----
+  upsertIn(collection, id, obj) {
+    if (!COLLECTIONS.includes(collection)) throw new Error(`unknown collection ${collection}`);
+    this.data[collection][id] = { ...obj, id };
+    this._save();
+    return this.data[collection][id];
+  }
+
+  removeIn(collection, id) {
+    if (!COLLECTIONS.includes(collection)) throw new Error(`unknown collection ${collection}`);
+    if (this.data[collection][id]) {
+      delete this.data[collection][id];
+      this._save();
+      return true;
+    }
+    return false;
+  }
+
+  listIn(collection) {
+    if (!COLLECTIONS.includes(collection)) throw new Error(`unknown collection ${collection}`);
+    return Object.values(this.data[collection]);
+  }
+
+  getIn(collection, id) {
+    if (!COLLECTIONS.includes(collection)) throw new Error(`unknown collection ${collection}`);
+    return this.data[collection][id] || null;
   }
 }
 

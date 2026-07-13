@@ -112,6 +112,38 @@ MCP-capable client at the included MCP server.
     that lists live per-client subscriptions (`mosquitto_ctrl` manages accounts
     and ACLs, not subscriptions), so there is nothing to integrate against —
     for mosquitto, wildcard resolution over observed traffic is the ceiling.
+- **Pipelines: industrial DataOps** — Manifold doesn't just observe the
+  namespace, it can *shape* it. Routes consume a topic filter, run an ordered
+  transform chain (**re-path** into a UNS-conformant hierarchy with `{n}`
+  segment templates, **pick/rename/set** payload fields, **scale** for unit
+  conversion, **numeric** coercion, **Sparkplug flatten**), and deliver to a
+  broker (optionally retained) or a **historian**. Every route gets a
+  **trie-backed dry-run**: before enabling, see exactly which observed topics
+  it consumes and the in→out topic/payload mapping — no other tool can preview
+  a pipeline against *your live namespace* like this. Feedback loops (a route
+  whose output re-matches its own source) are detected and blocked, and
+  per-route metrics (in/out/errors/loop-blocked) stream in the UI.
+- **Models: contextualization** — bind attributes from many raw topics (even
+  across brokers, a field plucked from each payload) and publish them as **one
+  merged object at a clean UNS path**, on change (debounced) or on an interval.
+  Ten raw topics become one `Pump-7`.
+- **Historian integrations** — first-class time-series targets for pipelines
+  and the recorder: **InfluxDB v2** (line-protocol writes with proper
+  escaping/typing, token auth) and **Timebase historian** (TVQ writes into a
+  dataset via its public REST API on `:4511`; datasets auto-create, and the
+  write path is confirmable/overridable against your instance's own Swagger at
+  `:4511/api/help`). Timebase also ingests MQTT/Sparkplug natively, so pointing
+  its collector at a pipeline's output namespace is an equally supported path.
+  Per-connection **test write** button; secrets stored server-side only.
+- **Recorder + Replay** — capture everything under a filter as a time series to
+  an append-only local file (bounded, owner-only) or straight into a historian;
+  peek at captured points, then **replay** a recording onto a broker with the
+  original relative timing (speed factor, loop, topic prefix) — real traffic
+  becomes a reusable test fixture.
+- **Schema contracts** — lock the inferred JSON shape of a topic and get
+  violations the moment a publisher drifts: missing fields, new fields, type
+  changes, with exact paths. Catches the "firmware update silently changed the
+  payload" failure before consumers do.
 - **Alert rules** — active watching, not just looking: *branch silent* (nothing
   under a path for N seconds), *topic silent*, and *new topic appears* (under an
   optional prefix). Rules persist, are evaluated server-side every 15s against
@@ -254,6 +286,8 @@ backend.
 | `mqtt_resolve_subscriptions` / `mqtt_topic_tree` | Resolve wildcard filters against observed topics; walk the topic tree |
 | `mqtt_admin_pubsub` | Per-client subscriptions from the broker admin API (optionally resolved) |
 | `uns_tree` / `uns_lint` / `uns_events` | Nested UNS tree (exact counts, depth-capped), namespace conformance lint, namespace event feed |
+| `pipelines_list` / `pipeline_preview` | DataOps routes with live metrics; dry-run a route against observed topics |
+| `historians_list` / `models_list` / `contracts_violations` | Historian connections, contextualization models, schema-drift events |
 | `opcua_connect` / `opcua_disconnect` / `opcua_list_connections` | Manage OPC UA connections |
 | `opcua_browse` / `opcua_read` / `opcua_monitor` | Walk the address space, read and monitor nodes |
 | `cesmii_configure` / `cesmii_status` | Configure and authenticate a CESMII SMIP instance |
@@ -285,6 +319,12 @@ backend.
 | `GET/POST/DELETE` | `/api/uns/mounts` | Mount OPC UA / i3X sources into the UNS view |
 | `GET/POST/DELETE` | `/api/alerts/rules` | Alert rules (branch-silent, topic-silent, new-topic) |
 | `GET` | `/api/alerts/events` | Recent alert firings |
+| `GET/POST/DELETE` | `/api/pipelines` · `POST /preview` | DataOps routes (source → transforms → target) + trie-backed dry-run |
+| `GET/POST/DELETE` | `/api/historians` · `POST /:id/test` | InfluxDB / Timebase connections + test write |
+| `GET/POST/DELETE` | `/api/models` | Contextualization models (multi-source merged objects) |
+| `GET/POST/DELETE` | `/api/recorder` · `GET /:id/data` | Recordings (file or historian) + bounded read-back |
+| `POST/DELETE` | `/api/recorder/replay` | Start/stop replaying a recording onto a broker |
+| `GET/POST/DELETE` | `/api/contracts` · `/infer` · `/violations` | Schema contracts: infer, lock, drift feed |
 | `GET` | `/api/mqtt/brokers/:id/messages?topic=` | Recent messages for a topic |
 | `POST` | `/api/mqtt/brokers/:id/publish` | Publish (`{ topic, payload, qos?, retain? }`) |
 | `POST` | `/api/opcua/connections` | Connect (`{ endpointUrl, securityMode?, ... }`) |

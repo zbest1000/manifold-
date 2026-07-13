@@ -6,6 +6,7 @@ const assert = require('node:assert');
 process.env.PORT = '0';
 process.env.TC_AUTH_TOKEN = 'test-secret-token';
 process.env.TC_NO_RESTORE = '1';
+process.env.TC_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-auth-test-'));
 
 let baseUrl;
 let server;

@@ -262,6 +262,7 @@ class MqttManager extends EventEmitter {
     let forwarded = 0;
     let lastActivity = null;
 
+    const tap = this.listenerCount('message') > 0;
     for (const row of rows) {
       const messageObj = this.buildMessage(brokerId, row);
       lastActivity = messageObj.timestamp;
@@ -271,6 +272,11 @@ class MqttManager extends EventEmitter {
       if (registry && this.isSparkplugTopic(messageObj.topic)) {
         registry.update(messageObj.topic, messageObj.sparkplug || null, row.ts);
       }
+
+      // Message tap for the DataOps engines (pipelines, recorder, contracts,
+      // models). Fires on the coalesced stream — bounded by topics touched per
+      // flush, not raw publish rate — and costs one branch when nobody listens.
+      if (tap) this.emit('message', messageObj);
 
       if (forwarded < FORWARD_CAP) {
         batch.push(messageObj);

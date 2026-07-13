@@ -303,6 +303,74 @@ server.tool(
 );
 
 server.tool(
+  'pipelines_list',
+  'DataOps pipeline routes (source → transforms → target) with live per-route metrics: matched/published/error counts, loop-blocked messages, last error.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/pipelines'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'pipeline_preview',
+  'Dry-run a pipeline route against the topics actually observed on a broker: exact match count and the in→out topic/payload mapping after transforms. Nothing is published. Route shape: { source: {brokerId, filter}, transforms: [...], target: {...} }.',
+  {
+    route: z.object({}).passthrough().describe('Route definition: { source: {brokerId, filter}, transforms?, target }'),
+    sampleLimit: z.number().optional()
+  },
+  async ({ route, sampleLimit }) => {
+    try {
+      return ok(await api('/api/pipelines/preview', { method: 'POST', body: JSON.stringify({ route, sampleLimit }) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'historians_list',
+  'Configured historian connections (InfluxDB v2, Timebase) that pipelines and the recorder can write time-series into. Secrets are redacted.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/historians'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contracts_violations',
+  'Recent schema-contract violations: payload drift (missing fields, new fields, type changes) on topics whose shape was locked. Newest first.',
+  { limit: z.number().optional() },
+  async ({ limit }) => {
+    try {
+      return ok(await api(`/api/contracts/violations${limit ? `?limit=${Number(limit)}` : ''}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'models_list',
+  'Contextualization models: multi-source attribute bindings published as merged objects at UNS paths, with publish/error status.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/models'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
   'mqtt_admin_pubsub',
   'Per-client subscriptions from the broker admin API (must be configured in the UI first), optionally wildcard-resolved against observed topics — the full "who receives what" map that core MQTT cannot provide.',
   {
