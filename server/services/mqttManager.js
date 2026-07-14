@@ -326,15 +326,16 @@ class MqttManager extends EventEmitter {
   subscribe(brokerId, topic, qos = 0) {
     const client = this.requireClient(brokerId);
     client.subscribe(topic, { qos }, (error, granted) => {
-      if (error) {
-        this.io.emit('subscription-error', { brokerId, topic, error: error.message });
-        return;
-      }
       // A broker can accept the packet but refuse the grant (SUBACK 0x80).
       // Stock EMQX does exactly this for QoS 1+ subscriptions to bare '#'
       // (its default ACL allows them only at QoS 0) — without a fallback the
-      // explorer would sit connected and silently ingest nothing.
-      if (granted?.length && granted.every((g) => g.qos === 128)) {
+      // explorer would sit connected and silently ingest nothing. mqtt.js
+      // surfaces the refusal as an error carrying the SUBACK packet (granted
+      // codes >= 128); older versions reported it via granted[].qos === 128.
+      const refused =
+        (Array.isArray(error?.packet?.granted) && error.packet.granted.some((c) => c >= 128)) ||
+        (!error && granted?.length && granted.every((g) => g.qos === 128));
+      if (refused) {
         if (qos > 0) {
           this.io.emit('subscription-downgraded', {
             brokerId,
@@ -347,6 +348,10 @@ class MqttManager extends EventEmitter {
         } else {
           this.io.emit('subscription-error', { brokerId, topic, error: 'subscription refused by broker (SUBACK 0x80)' });
         }
+        return;
+      }
+      if (error) {
+        this.io.emit('subscription-error', { brokerId, topic, error: error.message });
         return;
       }
       this.subscriptions.get(brokerId)?.add(topic);

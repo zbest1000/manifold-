@@ -48,12 +48,20 @@ test('mqttManager.detectMessageType classifies by topic and payload', () => {
 test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the grant', () => {
   const events = [];
   const m = new MqttManager({ emit: (ev, data) => events.push({ ev, data }) });
-  // Fake client mimicking stock EMQX: '#' at QoS 1+ → SUBACK 0x80; QoS 0 → granted.
+  // Fake client mimicking stock EMQX through mqtt.js: '#' at QoS 1+ → the
+  // callback gets an ERROR carrying the SUBACK packet with granted [128]
+  // (granted arg still echoes the request); QoS 0 → granted normally.
   const calls = [];
+  const refusal = (topic, qos) => {
+    const err = new Error('Subscribe error: Unspecified error');
+    err.packet = { cmd: 'suback', granted: [128] };
+    return [err, [{ topic, qos }]];
+  };
   m.clients.set('b1', {
     subscribe(topic, opts, cb) {
       calls.push({ topic, qos: opts.qos });
-      cb(null, [{ topic, qos: opts.qos > 0 ? 128 : 0 }]);
+      if (opts.qos > 0) cb(...refusal(topic, opts.qos));
+      else cb(null, [{ topic, qos: 0 }]);
     },
     end() {}
   });
@@ -74,7 +82,9 @@ test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the gran
   events.length = 0;
   m.clients.set('b1', {
     subscribe(topic, opts, cb) {
-      cb(null, [{ topic, qos: 128 }]);
+      const err = new Error('Subscribe error: Not authorized');
+      err.packet = { cmd: 'suback', granted: [135] };
+      cb(err, [{ topic, qos: opts.qos }]);
     },
     end() {}
   });
