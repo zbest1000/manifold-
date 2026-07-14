@@ -123,6 +123,38 @@ test('timebase-ce backend writes gateway JSON rows with optional Deltix signing'
   assert.ok(!('X-Deltix-ApiKey' in captured.headers));
 });
 
+test('timescaledb backend creates schema once and batch-inserts parameterized rows', async () => {
+  const queries = [];
+  const fakePool = { query: async (text, values) => (queries.push({ text: text.replace(/\s+/g, ' ').trim(), values }), { rows: [] }) };
+  const conn = { type: 'timescaledb', host: 'h', database: 'd', user: 'u', __pool: fakePool, __schemaReady: new Set() };
+
+  await historians.writePoints(conn, [
+    { tag: 'plant/temp', ts: 1700000000000, value: 21.5, quality: 192 },
+    { tag: 'plant/state', ts: 1700000001000, value: 'RUNNING', quality: 64 }
+  ]);
+  // schema: table + index + hypertable attempt, then one multi-row insert
+  assert.match(queries[0].text, /CREATE TABLE IF NOT EXISTS manifold_samples/);
+  assert.match(queries[1].text, /CREATE INDEX IF NOT EXISTS manifold_samples_topic_ts/);
+  assert.match(queries[2].text, /create_hypertable\('manifold_samples', 'ts', if_not_exists => TRUE\)/);
+  const insert = queries[3];
+  assert.match(insert.text, /INSERT INTO manifold_samples \(ts, topic, value, raw, quality\) VALUES \(\$1,\$2,\$3,\$4,\$5\),\(\$6,\$7,\$8,\$9,\$10\)/);
+  assert.strictEqual(insert.values[1], 'plant/temp');
+  assert.strictEqual(insert.values[2], 21.5);
+  assert.strictEqual(insert.values[7], null, 'non-numeric value → NULL numeric column');
+  assert.strictEqual(insert.values[8], 'RUNNING');
+  assert.strictEqual(insert.values[9], 64);
+
+  // second write: schema is cached, straight to insert
+  await historians.writePoints(conn, [{ tag: 't', ts: 1, value: 2 }], null);
+  assert.match(queries[4].text, /INSERT INTO/);
+
+  // identifier injection is refused
+  await assert.rejects(
+    () => historians.writePoints({ ...conn, table: 'x; DROP TABLE users;--' }, [{ tag: 't', ts: 1, value: 2 }]),
+    /invalid table name/
+  );
+});
+
 test('timebase writePath override and unsupported types', async () => {
   let url;
   const fetchImpl = async (u) => {

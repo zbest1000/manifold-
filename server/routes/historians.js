@@ -18,11 +18,18 @@ router.get('/', (req, res) => {
 // POST /api/historians { id?, name, type, url, ...backend fields }
 router.post('/', (req, res) => {
   const { profiles } = req.app.locals.services;
-  const { id, name, type, url, org, bucket, token, measurement, dataset, stream, messageType, writePath, apiKey, apiSecret } = req.body || {};
+  const {
+    id, name, type, url, org, bucket, token, measurement, dataset, stream, messageType, writePath,
+    apiKey, apiSecret, host, port, database, user, password, ssl, table
+  } = req.body || {};
   if (!historians.supportedTypes().includes(type)) {
     return res.status(400).json({ error: `type must be one of: ${historians.supportedTypes().join(', ')}` });
   }
-  if (!url) return res.status(400).json({ error: 'url is required' });
+  if (type === 'timescaledb') {
+    if (!host || !database || !user) return res.status(400).json({ error: 'host, database, and user are required for timescaledb' });
+  } else if (!url) {
+    return res.status(400).json({ error: 'url is required' });
+  }
   if (type === 'influxdb' && (!org || !bucket)) return res.status(400).json({ error: 'org and bucket are required for influxdb' });
   if (type === 'timebase' && !dataset) return res.status(400).json({ error: 'dataset is required for timebase' });
   if (type === 'timebase-ce' && !stream) return res.status(400).json({ error: 'stream is required for timebase-ce' });
@@ -31,7 +38,7 @@ router.post('/', (req, res) => {
   const saved = profiles.upsertIn('historians', id || uuidv4(), {
     name: name || null,
     type,
-    url,
+    url: url || null,
     org: org || null,
     bucket: bucket || null,
     measurement: measurement || null,
@@ -39,10 +46,17 @@ router.post('/', (req, res) => {
     stream: stream || null,
     messageType: messageType || null,
     writePath: writePath || null,
+    host: host || null,
+    port: Number(port) || null,
+    database: database || null,
+    user: user || null,
+    ssl: Boolean(ssl),
+    table: table || null,
     // keep the stored secret when the client omits it on edit
     token: token !== undefined ? token : existing?.token || null,
     apiKey: apiKey !== undefined ? apiKey : existing?.apiKey || null,
-    apiSecret: apiSecret !== undefined ? apiSecret : existing?.apiSecret || null
+    apiSecret: apiSecret !== undefined ? apiSecret : existing?.apiSecret || null,
+    password: password !== undefined ? password : existing?.password || null
   });
   res.status(201).json(historians.publicConfig(saved));
 });

@@ -22,6 +22,8 @@ const INFLUX_URL = process.env.INTEGRATION_INFLUX_URL || 'http://127.0.0.1:8086'
 const INFLUX_TOKEN = process.env.INTEGRATION_INFLUX_TOKEN || 'manifold-ci-token';
 const INFLUX_ORG = process.env.INTEGRATION_INFLUX_ORG || 'manifold';
 const INFLUX_BUCKET = process.env.INTEGRATION_INFLUX_BUCKET || 'ci';
+const TSDB_HOST = process.env.INTEGRATION_TSDB_HOST || '127.0.0.1';
+const TSDB_PORT = Number(process.env.INTEGRATION_TSDB_PORT || 5432);
 
 const until = async (fn, ms = 15000) => {
   const deadline = Date.now() + ms;
@@ -72,4 +74,30 @@ test('InfluxDB: line-protocol writes land and can be queried back via Flux', { s
     return csv.includes('42') && csv.includes('ci_test');
   });
   assert.ok(found, 'written points must be queryable from the real InfluxDB');
+});
+
+test('TimescaleDB: batch inserts land in a real hypertable and query back', { skip: !ENABLED }, async () => {
+  const conn = {
+    type: 'timescaledb',
+    host: TSDB_HOST,
+    port: TSDB_PORT,
+    database: 'manifold',
+    user: 'manifold',
+    password: 'ci-password',
+    table: 'ci_samples'
+  };
+  const tag = `ci/run/${Date.now()}`;
+  await historians.writePoints(conn, [
+    { tag, ts: Date.now() - 1000, value: 41, quality: 192 },
+    { tag, ts: Date.now(), value: 42, quality: 192 }
+  ]);
+
+  const { Pool } = require('pg');
+  const pool = new Pool({ host: TSDB_HOST, port: TSDB_PORT, database: 'manifold', user: 'manifold', password: 'ci-password' });
+  const res = await pool.query('SELECT value, quality FROM ci_samples WHERE topic = $1 ORDER BY ts', [tag]);
+  await pool.end();
+  assert.strictEqual(res.rows.length, 2);
+  assert.strictEqual(Number(res.rows[1].value), 42);
+  assert.strictEqual(Number(res.rows[1].quality), 192);
+  await historians.closePools();
 });

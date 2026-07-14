@@ -129,7 +129,10 @@ MCP-capable client at the included MCP server.
   Ten raw topics become one `Pump-7`.
 - **Historian integrations** — first-class time-series targets for pipelines
   and the recorder: **InfluxDB v2** (line-protocol writes with proper
-  escaping/typing, token auth), **FINOS TimeBase CE** (JSON rows via the
+  escaping/typing, token auth), **TimescaleDB / PostgreSQL** (batched
+  parameterized inserts into a samples table auto-created on first write and
+  promoted to a hypertable when Timescale is present — plain Postgres works
+  too), **FINOS TimeBase CE** (JSON rows via the
   TimebaseWS gateway on `:8099` — `{$type, symbol, timestamp, value, quality}`
   with optional Deltix HMAC-SHA384 API-key signing; write path overridable per
   gateway version), and **Timebase historian** (TVQ writes into a

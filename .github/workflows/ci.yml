@@ -67,6 +67,14 @@ jobs:
           DOCKER_INFLUXDB_INIT_ORG: manifold
           DOCKER_INFLUXDB_INIT_BUCKET: ci
           DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: manifold-ci-token
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: manifold
+          POSTGRES_USER: manifold
+          POSTGRES_PASSWORD: ci-password
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,6 +87,7 @@ jobs:
         run: |
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8086/health && break; sleep 2; done
           for i in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/1883) 2>/dev/null && break; sleep 2; done
+          for i in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null && break; sleep 2; done
       - name: Run real-service integration tests
         working-directory: server
         env:

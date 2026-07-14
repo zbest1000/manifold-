@@ -12,6 +12,14 @@
  * - `influxdb`: InfluxDB v2 line-protocol write
  *   (POST {url}/api/v2/write?org=&bucket=&precision=ms, `Authorization: Token`).
  *   Config: { type:'influxdb', url, org, bucket, token, measurement? }.
+ * - `timescaledb`: TimescaleDB (or plain PostgreSQL) over the `pg` driver.
+ *   Batched multi-row inserts into a samples table (created on first write:
+ *   ts timestamptz, topic text, value double precision, raw text, quality
+ *   smallint, indexed by (topic, ts DESC)). On TimescaleDB the table is
+ *   promoted to a hypertable via `create_hypertable(..., if_not_exists)`;
+ *   on plain Postgres that call fails harmlessly and the table still works.
+ *   Config: { type:'timescaledb', host, port?, database, user, password?,
+ *   ssl?, table? }.
  * - `timebase-ce`: FINOS TimeBase CE via the TimebaseWS web gateway
  *   (github.com/epam/TimebaseWS, default port 8099). Messages POST to
  *   `/api/v0/{stream}/write` as JSON rows { $type, symbol, timestamp, ... };
@@ -165,12 +173,96 @@ async function timebaseCeWrite(conn, points, fetchImpl) {
   return { written: points.length };
 }
 
-const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, 'timebase-ce': timebaseCeWrite };
+// ---- TimescaleDB / PostgreSQL ------------------------------------------------
+
+let PgPool = null; // lazy — the pg driver only loads if a timescaledb historian exists
+const pgPools = new Map(); // cache key -> { pool, schemaReady: Set(table) }
+
+function safeIdent(name) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(name)) throw new Error(`invalid table name "${name}"`);
+  return name;
+}
+
+function pgEntryFor(conn) {
+  if (conn.__pool) return { pool: conn.__pool, schemaReady: conn.__schemaReady || new Set() }; // test injection
+  if (!PgPool) PgPool = require('pg').Pool;
+  const key = JSON.stringify([conn.host, conn.port, conn.database, conn.user, Boolean(conn.ssl)]);
+  let entry = pgPools.get(key);
+  if (!entry) {
+    entry = {
+      pool: new PgPool({
+        host: conn.host,
+        port: Number(conn.port) || 5432,
+        database: conn.database,
+        user: conn.user,
+        password: conn.password || undefined,
+        ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+        max: 4
+      }),
+      schemaReady: new Set()
+    };
+    pgPools.set(key, entry);
+  }
+  return entry;
+}
+
+async function timescaleWrite(conn, points) {
+  if (!conn.host || !conn.database || !conn.user) throw new Error('timescaledb needs host, database, and user');
+  const table = safeIdent(conn.table || 'manifold_samples');
+  const { pool, schemaReady } = pgEntryFor(conn);
+
+  if (!schemaReady.has(table)) {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS ${table} (
+         ts timestamptz NOT NULL,
+         topic text NOT NULL,
+         value double precision,
+         raw text,
+         quality smallint
+       )`
+    );
+    await pool.query(`CREATE INDEX IF NOT EXISTS ${table}_topic_ts ON ${table} (topic, ts DESC)`);
+    try {
+      // TimescaleDB promotion; on plain Postgres the function doesn't exist —
+      // the table still works, just without hypertable chunking.
+      await pool.query(`SELECT create_hypertable('${table}', 'ts', if_not_exists => TRUE)`);
+    } catch {
+      // not a Timescale instance — fine
+    }
+    schemaReady.add(table);
+  }
+
+  // One multi-row parameterized INSERT per batch.
+  const params = [];
+  const rows = points.map((p, i) => {
+    const base = i * 5;
+    const num = typeof p.value === 'number' ? p.value : Number(p.value);
+    params.push(
+      new Date(p.ts),
+      p.tag,
+      Number.isFinite(num) ? num : null,
+      typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value),
+      p.quality ?? 192
+    );
+    return `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5})`;
+  });
+  await pool.query(`INSERT INTO ${table} (ts, topic, value, raw, quality) VALUES ${rows.join(',')}`, params);
+  return { written: points.length };
+}
+
+/** Close pooled Postgres connections (shutdown). */
+async function closePools() {
+  for (const { pool } of pgPools.values()) await pool.end().catch(() => {});
+  pgPools.clear();
+}
+
+const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, timescaledb: timescaleWrite, 'timebase-ce': timebaseCeWrite };
 
 async function writePoints(conn = {}, points = [], fetchImpl = globalThis.fetch) {
   const backend = BACKENDS[conn.type];
   if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
-  if (typeof fetchImpl !== 'function') throw new Error('no fetch implementation available');
+  // timescaledb talks Postgres, not HTTP — only the HTTP backends need fetch
+  if (conn.type !== 'timescaledb' && typeof fetchImpl !== 'function') throw new Error('no fetch implementation available');
   if (!points.length) return { written: 0 };
   return backend(conn, points, fetchImpl);
 }
@@ -181,8 +273,8 @@ function supportedTypes() {
 
 /** Redact secrets for API responses. */
 function publicConfig(conn) {
-  const { token, apiKey, apiSecret, ...rest } = conn;
-  return { ...rest, hasSecret: Boolean(token || apiKey || apiSecret) };
+  const { token, apiKey, apiSecret, password, ...rest } = conn;
+  return { ...rest, hasSecret: Boolean(token || apiKey || apiSecret || password) };
 }
 
-module.exports = { writePoints, supportedTypes, publicConfig, toLineProtocol, DEFAULT_TIMEBASE_PATH };
+module.exports = { writePoints, supportedTypes, publicConfig, toLineProtocol, closePools, DEFAULT_TIMEBASE_PATH };

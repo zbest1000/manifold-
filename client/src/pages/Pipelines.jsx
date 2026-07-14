@@ -506,7 +506,7 @@ function ModelsTab({ brokers }) {
 function HistoriansTab() {
   const [data, setData] = useState({ historians: [], types: [] });
   const [outbox, setOutbox] = useState({});
-  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', stream: '', messageType: '', writePath: '', apiKey: '', apiSecret: '' });
+  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', stream: '', messageType: '', writePath: '', apiKey: '', apiSecret: '', host: '', port: '', database: '', user: '', password: '', table: '', ssl: false });
   const [testing, setTesting] = useState(null); // id -> result
   const load = useCallback(() => api.listHistorians().then(setData).catch(() => {}), []);
   useEffect(() => {
@@ -546,7 +546,7 @@ function HistoriansTab() {
                 <Badge>{h.type}</Badge>
               </div>
               <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
-                {h.url}
+                {h.type === 'timescaledb' ? `${h.host}:${h.port || 5432}/${h.database} · table=${h.table || 'manifold_samples'}` : h.url}
                 {h.type === 'influxdb' && ` · org=${h.org} bucket=${h.bucket}`}
                 {h.type === 'timebase' && ` · dataset=${h.dataset}`}
                 {h.type === 'timebase-ce' && ` · stream=${h.stream}`}
@@ -590,21 +590,49 @@ function HistoriansTab() {
             <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200">
               <option value="influxdb">InfluxDB v2</option>
               <option value="timebase">Timebase historian (Flow Software)</option>
+              <option value="timescaledb">TimescaleDB / PostgreSQL</option>
               <option value="timebase-ce">TimeBase CE (FINOS, WS gateway)</option>
             </select>
           </Field>
           <Field label="Name">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="plant historian" />
           </Field>
-          <Field label="URL" className="col-span-2">
-            <Input
-              value={form.url}
-              onChange={(e) => setForm({ ...form, url: e.target.value })}
-              placeholder={
-                form.type === 'influxdb' ? 'http://influx-host:8086' : form.type === 'timebase-ce' ? 'http://gateway-host:8099' : 'http://historian-host:4511'
-              }
-            />
-          </Field>
+          {form.type !== 'timescaledb' && (
+            <Field label="URL" className="col-span-2">
+              <Input
+                value={form.url}
+                onChange={(e) => setForm({ ...form, url: e.target.value })}
+                placeholder={
+                  form.type === 'influxdb' ? 'http://influx-host:8086' : form.type === 'timebase-ce' ? 'http://gateway-host:8099' : 'http://historian-host:4511'
+                }
+              />
+            </Field>
+          )}
+          {form.type === 'timescaledb' && (
+            <>
+              <Field label="Host">
+                <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="tsdb-host" />
+              </Field>
+              <Field label="Port">
+                <Input value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} placeholder="5432" />
+              </Field>
+              <Field label="Database">
+                <Input value={form.database} onChange={(e) => setForm({ ...form, database: e.target.value })} />
+              </Field>
+              <Field label="User">
+                <Input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} />
+              </Field>
+              <Field label="Password">
+                <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              </Field>
+              <Field label="Table (optional)">
+                <Input value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value })} placeholder="manifold_samples" />
+              </Field>
+              <label className="flex items-end gap-2 pb-2 text-xs text-slate-300">
+                <input type="checkbox" checked={form.ssl} onChange={(e) => setForm({ ...form, ssl: e.target.checked })} /> SSL
+              </label>
+            </>
+          )}
           {form.type === 'influxdb' && (
             <>
               <Field label="Org">
@@ -670,10 +698,12 @@ function HistoriansTab() {
           className="mt-3"
           onClick={save}
           disabled={
-            !form.url ||
-            (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
-            (form.type === 'timebase' && !form.dataset) ||
-            (form.type === 'timebase-ce' && !form.stream)
+            form.type === 'timescaledb'
+              ? !form.host || !form.database || !form.user
+              : !form.url ||
+                (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
+                (form.type === 'timebase' && !form.dataset) ||
+                (form.type === 'timebase-ce' && !form.stream)
           }
         >
           <Plus size={14} className="mr-1" /> Add historian

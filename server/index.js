@@ -342,6 +342,7 @@ const shutdown = async () => {
   models.stop();
   bindings.stop();
   await sparkplugPublisher.stop().catch(() => {}); // clean NDEATHs, not broker-side wills
+  await require('./services/historians').closePools().catch(() => {});
   audit.close();
   mqttManager.shutdown();
   await opcuaManager.shutdown();
