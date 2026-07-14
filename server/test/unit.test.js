@@ -45,6 +45,45 @@ test('mqttManager.detectMessageType classifies by topic and payload', () => {
   m.shutdown();
 });
 
+test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the grant', () => {
+  const events = [];
+  const m = new MqttManager({ emit: (ev, data) => events.push({ ev, data }) });
+  // Fake client mimicking stock EMQX: '#' at QoS 1+ → SUBACK 0x80; QoS 0 → granted.
+  const calls = [];
+  m.clients.set('b1', {
+    subscribe(topic, opts, cb) {
+      calls.push({ topic, qos: opts.qos });
+      cb(null, [{ topic, qos: opts.qos > 0 ? 128 : 0 }]);
+    },
+    end() {}
+  });
+  m.subscriptions.set('b1', new Set());
+  m.connections.set('b1', { status: 'connected' }); // requireClient checks live status
+
+  m.subscribe('b1', '#', 1);
+  assert.deepStrictEqual(calls, [
+    { topic: '#', qos: 1 },
+    { topic: '#', qos: 0 }
+  ]);
+  assert.ok(m.subscriptions.get('b1').has('#'), 'fallback subscription must be recorded');
+  assert.ok(events.some((e) => e.ev === 'subscription-downgraded' && e.data.from === 1 && e.data.to === 0));
+  assert.ok(events.some((e) => e.ev === 'subscription-success' && e.data.qos === 0));
+
+  // Refused even at QoS 0 → surfaced as an error, not silence.
+  m.subscriptions.get('b1').clear();
+  events.length = 0;
+  m.clients.set('b1', {
+    subscribe(topic, opts, cb) {
+      cb(null, [{ topic, qos: 128 }]);
+    },
+    end() {}
+  });
+  m.subscribe('b1', '$SYS/#', 0);
+  assert.ok(events.some((e) => e.ev === 'subscription-error' && /refused/.test(e.data.error)));
+  assert.ok(!m.subscriptions.get('b1').has('$SYS/#'));
+  m.shutdown();
+});
+
 test('cesmiiClient requires full configuration', () => {
   const c = new CesmiiClient();
   assert.strictEqual(c.isConfigured(), false);

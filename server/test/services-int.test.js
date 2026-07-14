@@ -45,8 +45,11 @@ test('EMQX: manager connects, auto-subscribes, and ingests real retained traffic
     manager.connectToBroker({ id: 'emqx', host: EMQX_HOST, port: EMQX_PORT, name: 'ci-emqx' });
     assert.ok(await until(() => manager.getConnection('emqx')?.status === 'connected'), 'must connect to EMQX');
 
+    // Both retained: stock EMQX refuses '#' at QoS 1 (SUBACK 0x80) and the
+    // manager falls back to QoS 0 — retained messages are delivered whenever
+    // that (re)subscription lands, so the test doesn't race the SUBACK round.
     await manager.publish('emqx', 'ci/plant/line1/temp', { v: 21.5 }, { retain: true });
-    await manager.publish('emqx', 'ci/plant/line1/press', '3.1', { qos: 1 });
+    await manager.publish('emqx', 'ci/plant/line1/press', '3.1', { qos: 1, retain: true });
 
     assert.ok(
       await until(() => manager.stores.get('emqx')?.topicCount() >= 2),

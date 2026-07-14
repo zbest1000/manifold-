@@ -330,6 +330,25 @@ class MqttManager extends EventEmitter {
         this.io.emit('subscription-error', { brokerId, topic, error: error.message });
         return;
       }
+      // A broker can accept the packet but refuse the grant (SUBACK 0x80).
+      // Stock EMQX does exactly this for QoS 1+ subscriptions to bare '#'
+      // (its default ACL allows them only at QoS 0) — without a fallback the
+      // explorer would sit connected and silently ingest nothing.
+      if (granted?.length && granted.every((g) => g.qos === 128)) {
+        if (qos > 0) {
+          this.io.emit('subscription-downgraded', {
+            brokerId,
+            topic,
+            from: qos,
+            to: 0,
+            reason: 'broker refused the grant at this QoS (SUBACK 0x80) — retrying at QoS 0'
+          });
+          this.subscribe(brokerId, topic, 0);
+        } else {
+          this.io.emit('subscription-error', { brokerId, topic, error: 'subscription refused by broker (SUBACK 0x80)' });
+        }
+        return;
+      }
       this.subscriptions.get(brokerId)?.add(topic);
       this.io.emit('subscription-success', { brokerId, topic, qos, granted });
     });
