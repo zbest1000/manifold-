@@ -4,9 +4,9 @@ const assert = require('node:assert');
 // Boot the app WITH auth enabled (each test file runs in its own process, so
 // this env is set before ../index is required).
 process.env.PORT = '0';
-process.env.TC_AUTH_TOKEN = 'test-secret-token';
-process.env.TC_NO_RESTORE = '1';
-process.env.TC_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-auth-test-'));
+process.env.MANIFOLD_AUTH_TOKEN = 'test-secret-token';
+process.env.MANIFOLD_NO_RESTORE = '1';
+process.env.MANIFOLD_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-auth-test-'));
 
 let baseUrl;
 let server;

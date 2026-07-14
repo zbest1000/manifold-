@@ -23,7 +23,7 @@ const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 const READ_LIMIT_MAX = 5000;
 
 class Recorder {
-  constructor({ mqttManager, profiles, outbox = null, dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data') }) {
+  constructor({ mqttManager, profiles, outbox = null, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data') }) {
     this.manager = mqttManager;
     this.profiles = profiles;
     this.outbox = outbox;

@@ -56,12 +56,12 @@ A full demo stack (broker, OPC UA simulator, traffic generator) is one command a
 Manifold is a control plane: it can publish to brokers, send Sparkplug commands, and start network scans. Before exposing it beyond localhost, set a token:
 
 ```bash
-TC_AUTH_TOKEN=$(openssl rand -hex 24) npm start
+MANIFOLD_AUTH_TOKEN=$(openssl rand -hex 24) npm start
 ```
 
-With `TC_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `TC_VIEWER_TOKEN` adds an optional read-only role. Without tokens the server runs open and warns at startup.
+With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role. Without tokens the server runs open and warns at startup.
 
-Connection profiles persist in `server/data/profiles.json` (mode 0600; directory configurable via `TC_DATA_DIR`, restore disabled via `TC_NO_RESTORE=1`). The file may contain broker credentials, so protect the host.
+Connection profiles persist in `server/data/profiles.json` (mode 0600; directory configurable via `MANIFOLD_DATA_DIR`, restore disabled via `MANIFOLD_NO_RESTORE=1`). The file may contain broker credentials, so protect the host.
 
 ## MCP server
 
@@ -79,7 +79,7 @@ Point any MCP client at `mcp/index.js` with the backend running:
 }
 ```
 
-About 50 tools cover MQTT, UNS, Flows, DataOps, OPC UA, CESMII, and i3X. The full list is in [ARCHITECTURE.md](ARCHITECTURE.md#mcp-tools). Set `TC_AUTH_TOKEN` in the MCP server's environment when the backend runs authenticated.
+About 50 tools cover MQTT, UNS, Flows, DataOps, OPC UA, CESMII, and i3X. The full list is in [ARCHITECTURE.md](ARCHITECTURE.md#mcp-tools). Set `MANIFOLD_AUTH_TOKEN` in the MCP server's environment when the backend runs authenticated.
 
 ## Testing
 

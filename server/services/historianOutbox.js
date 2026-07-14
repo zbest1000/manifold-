@@ -26,7 +26,7 @@ const BATCH = 1000;
 const SPILL_MAX_BYTES = 20 * 1024 * 1024;
 
 class HistorianOutbox {
-  constructor({ profiles, dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data'), fetchImpl = globalThis.fetch, spillMaxBytes = SPILL_MAX_BYTES }) {
+  constructor({ profiles, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data'), fetchImpl = globalThis.fetch, spillMaxBytes = SPILL_MAX_BYTES }) {
     this.profiles = profiles;
     this.dir = path.join(dir, 'outbox');
     this.fetchImpl = fetchImpl;

@@ -15,7 +15,7 @@ function emptyCollections() {
  * configs, and per-broker admin API configs survive a server restart.
  *
  * Storage is a single JSON file (default `<server>/data/profiles.json`,
- * override with TC_DATA_DIR), written atomically (tmp + rename) with mode 0600.
+ * override with MANIFOLD_DATA_DIR), written atomically (tmp + rename) with mode 0600.
  * It CAN contain credentials (broker passwords, admin API secrets) — that is the
  * point of persistence — so the file is owner-readable only and the README says
  * so plainly. Encrypting at rest without a real key-management story would be
@@ -27,7 +27,7 @@ function emptyCollections() {
  *     mounts: { [id]: mount }, alertRules: { [id]: rule } }
  */
 class ProfileStore {
-  constructor(dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data')) {
+  constructor(dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data')) {
     this.dir = dir;
     this.file = path.join(dir, 'profiles.json');
     this.data = { mqtt: {}, opcua: {}, cesmii: null, i3x: null, mounts: {}, alertRules: {}, ...emptyCollections() };

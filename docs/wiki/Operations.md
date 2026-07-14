@@ -6,8 +6,8 @@ Manifold is a control plane (it can publish, actuate via Sparkplug commands,
 and scan networks). Run it authenticated anywhere beyond localhost:
 
 ```bash
-TC_AUTH_TOKEN=$(openssl rand -hex 24) \
-TC_VIEWER_TOKEN=$(openssl rand -hex 24) \
+MANIFOLD_AUTH_TOKEN=$(openssl rand -hex 24) \
+MANIFOLD_VIEWER_TOKEN=$(openssl rand -hex 24) \
 npm start
 ```
 
@@ -20,7 +20,7 @@ npm start
 
 Every mutating API call and socket command is recorded with role, IP, route,
 and outcome; secrets are redacted. View under **Settings → Audit** (admin
-only) or read the append-only JSONL in `TC_DATA_DIR`.
+only) or read the append-only JSONL in `MANIFOLD_DATA_DIR`.
 
 ## Prometheus
 
@@ -61,7 +61,7 @@ socket.
 
 ## Data directory
 
-`TC_DATA_DIR` (default `server/data/`) holds profiles, history snapshots,
+`MANIFOLD_DATA_DIR` (default `server/data/`) holds profiles, history snapshots,
 outbox spill, recordings, and the audit log. Files are written 0600/0700.
 The profiles file contains connection credentials — protect the host, and
 back the directory up if your DataOps config matters.

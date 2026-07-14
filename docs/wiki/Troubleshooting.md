@@ -11,4 +11,4 @@
 | UNS staleness marks a slow topic *dead* | The topic publishes rarely and hasn't established its cadence yet | Staleness is calibrated per topic (EMA of inter-arrival gaps); after a few publishes the thresholds adapt |
 | Sparkplug devices show offline after a broker restart | Edge nodes haven't re-birthed | Per specification, state comes from BIRTH certificates; ask the edge node for a rebirth (NCMD) or wait for its reconnect BIRTH |
 | Server tests fail with "Unable to deserialize cloned data" | Running files through `node --test`'s child-process IPC, which corrupts intermittently | Use `npm test` (the serial in-process runner). This affects the test harness only, never the server |
-| UI shows the unlock screen unexpectedly | `TC_AUTH_TOKEN` is set on the server | Enter the token; it is remembered locally. Viewer tokens get read-only access |
+| UI shows the unlock screen unexpectedly | `MANIFOLD_AUTH_TOKEN` is set on the server | Enter the token; it is remembered locally. Viewer tokens get read-only access |

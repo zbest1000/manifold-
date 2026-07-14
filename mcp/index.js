@@ -7,16 +7,15 @@
  * brokers, browse topics, read live payloads, and walk an OPC UA address space.
  *
  * It is a thin, stateless bridge over the backend REST API — start the backend
- * first (default http://localhost:5000) and point MANIFOLD_API_URL at it
- * (TOPIC_CANVAS_API_URL is still honored for existing setups).
+ * first (default http://localhost:5000) and point MANIFOLD_API_URL at it.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-const API_URL = (process.env.MANIFOLD_API_URL || process.env.TOPIC_CANVAS_API_URL || 'http://localhost:5000').replace(/\/$/, '');
-// Matches the backend's TC_AUTH_TOKEN when the server runs authenticated.
-const AUTH_TOKEN = process.env.TC_AUTH_TOKEN || process.env.TOPIC_CANVAS_TOKEN || '';
+const API_URL = (process.env.MANIFOLD_API_URL || 'http://localhost:5000').replace(/\/$/, '');
+// Matches the backend's MANIFOLD_AUTH_TOKEN when the server runs authenticated.
+const AUTH_TOKEN = process.env.MANIFOLD_AUTH_TOKEN || '';
 
 async function api(path, options = {}) {
   const url = `${API_URL}${path}`;

@@ -53,7 +53,7 @@ External tools on your host machine can use `localhost:1883` and
 ## Auth
 
 The stack runs **open** by default (fine for localhost). To require a token,
-set `TC_AUTH_TOKEN` on the `app` service in `docker-compose.yml`, then enter the
+set `MANIFOLD_AUTH_TOKEN` on the `app` service in `docker-compose.yml`, then enter the
 same token in the app's unlock screen.
 
 ## Common commands

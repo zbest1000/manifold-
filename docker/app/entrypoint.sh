@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-DATA_DIR="${TC_DATA_DIR:-/data}"
+DATA_DIR="${MANIFOLD_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
 # Seed the auto-connect profiles once (the app then owns/updates the file).

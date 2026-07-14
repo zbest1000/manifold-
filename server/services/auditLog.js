@@ -30,7 +30,7 @@ function redact(value, depth = 0) {
 }
 
 class AuditLog {
-  constructor(dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data')) {
+  constructor(dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data')) {
     this.file = path.join(dir, 'audit.jsonl');
     this.dir = dir;
     this.ring = [];

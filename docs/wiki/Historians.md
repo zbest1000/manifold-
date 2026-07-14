@@ -8,7 +8,7 @@ a historian directly.
 
 - Points queue in memory and flush every 2 s in batches.
 - A failed write spills the batch to an append-only JSONL file per historian
-  (under `TC_DATA_DIR/outbox/`). Spill survives restarts and drains
+  (under `MANIFOLD_DATA_DIR/outbox/`). Spill survives restarts and drains
   oldest-first once writes succeed again.
 - The spill file is capped (20 MB per historian). At the cap, the
   per-historian **drop policy** decides:

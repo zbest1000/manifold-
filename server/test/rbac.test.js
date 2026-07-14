@@ -1,14 +1,14 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 
-// Boot the app with BOTH tokens: admin (TC_AUTH_TOKEN) and read-only viewer
-// (TC_VIEWER_TOKEN). Covers role separation, the audit trail, the Prometheus
+// Boot the app with BOTH tokens: admin (MANIFOLD_AUTH_TOKEN) and read-only viewer
+// (MANIFOLD_VIEWER_TOKEN). Covers role separation, the audit trail, the Prometheus
 // endpoint, and config export/import.
 process.env.PORT = '0';
-process.env.TC_AUTH_TOKEN = 'admin-token';
-process.env.TC_VIEWER_TOKEN = 'viewer-token';
-process.env.TC_NO_RESTORE = '1';
-process.env.TC_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-rbac-test-'));
+process.env.MANIFOLD_AUTH_TOKEN = 'admin-token';
+process.env.MANIFOLD_VIEWER_TOKEN = 'viewer-token';
+process.env.MANIFOLD_NO_RESTORE = '1';
+process.env.MANIFOLD_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-rbac-test-'));
 
 let baseUrl;
 let server;

@@ -55,13 +55,13 @@ app.use(express.json({ limit: '10mb' }));
 // ---- Authentication + roles -------------------------------------------------
 // This is a CONTROL PLANE, not a viewer: the API can publish to brokers
 // (including Sparkplug commands that actuate equipment), disconnect
-// connections, and start network scans. Set TC_AUTH_TOKEN to require a bearer
-// token on every /api route and on the Socket.IO handshake. TC_VIEWER_TOKEN
+// connections, and start network scans. Set MANIFOLD_AUTH_TOKEN to require a bearer
+// token on every /api route and on the Socket.IO handshake. MANIFOLD_VIEWER_TOKEN
 // (optional) grants a READ-ONLY role: GETs succeed, every mutation is 403 —
 // hand it to dashboards and observers instead of the admin token. Without any
 // token the server runs open (dev convenience) and says so loudly at startup.
-const AUTH_TOKEN = process.env.TC_AUTH_TOKEN || '';
-const VIEWER_TOKEN = process.env.TC_VIEWER_TOKEN || '';
+const AUTH_TOKEN = process.env.MANIFOLD_AUTH_TOKEN || '';
+const VIEWER_TOKEN = process.env.MANIFOLD_VIEWER_TOKEN || '';
 
 function timingEqual(candidate, expected) {
   if (typeof candidate !== 'string' || candidate.length === 0 || !expected) return false;
@@ -150,7 +150,7 @@ function restoreProfiles() {
     });
   }
 }
-if (process.env.TC_NO_RESTORE !== '1') {
+if (process.env.MANIFOLD_NO_RESTORE !== '1') {
   restoreProfiles();
   const restoredMsgs = history.restore();
   if (restoredMsgs) console.log(`history: restored ${restoredMsgs} recent message(s)`);
@@ -322,9 +322,9 @@ server.listen(PORT, () => {
   console.log(`Manifold server listening on port ${PORT}`);
   if (!AUTH_TOKEN) {
     console.warn(
-      '⚠️  TC_AUTH_TOKEN is not set — the API and socket are UNAUTHENTICATED. ' +
+      '⚠️  MANIFOLD_AUTH_TOKEN is not set — the API and socket are UNAUTHENTICATED. ' +
         'Anyone who can reach this port can publish to brokers and start scans. ' +
-        'Set TC_AUTH_TOKEN before exposing this beyond localhost.'
+        'Set MANIFOLD_AUTH_TOKEN before exposing this beyond localhost.'
     );
   }
 });

@@ -11,7 +11,7 @@ RUN npm run build
 # ---- Stage 2: runtime (server + built client) ----
 FROM node:20 AS runtime
 ENV NODE_ENV=production
-ENV TC_DATA_DIR=/data
+ENV MANIFOLD_DATA_DIR=/data
 WORKDIR /app/server
 
 # Server production dependencies

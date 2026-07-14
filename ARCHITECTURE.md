@@ -229,7 +229,7 @@ sequenceDiagram
 
 ## Security model
 
-- `TC_AUTH_TOKEN` (admin) and optional `TC_VIEWER_TOKEN` (read-only) gate the
+- `MANIFOLD_AUTH_TOKEN` (admin) and optional `MANIFOLD_VIEWER_TOKEN` (read-only) gate the
   REST API and the socket handshake. Viewer tokens can read everything but
   every mutation — HTTP or socket — is refused.
 - Every mutating action lands in the audit log (role, IP, route, outcome)

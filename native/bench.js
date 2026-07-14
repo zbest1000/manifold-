@@ -1,5 +1,5 @@
 // Reproduce the ingest benchmark. Build first: `cargo build --release` in this
-// dir, then `cp target/release/libtopic_canvas_native.so index.node`.
+// dir, then `cp target/release/libmanifold_native.so index.node`.
 const { TopicStore } = require('./index.node');
 
 const T = 1000;

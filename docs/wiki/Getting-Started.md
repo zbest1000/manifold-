@@ -42,8 +42,8 @@ subscriptions at QoS 1.
 | Variable | Purpose |
 |---|---|
 | `PORT` | HTTP/socket port (default 5000) |
-| `TC_AUTH_TOKEN` | Admin bearer token; enables auth on API + socket |
-| `TC_VIEWER_TOKEN` | Optional read-only token |
-| `TC_DATA_DIR` | Data directory (profiles, history, outbox spill, audit) |
-| `TC_NO_RESTORE` | `1` = don't reconnect saved profiles on boot |
+| `MANIFOLD_AUTH_TOKEN` | Admin bearer token; enables auth on API + socket |
+| `MANIFOLD_VIEWER_TOKEN` | Optional read-only token |
+| `MANIFOLD_DATA_DIR` | Data directory (profiles, history, outbox spill, audit) |
+| `MANIFOLD_NO_RESTORE` | `1` = don't reconnect saved profiles on boot |
 | `CLIENT_URL` | CORS origin for the dev client |

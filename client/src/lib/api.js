@@ -3,7 +3,7 @@
 import { useStore } from '@/store/store';
 import { humanizeError } from '@/lib/humanizeError';
 
-// Bearer token for servers started with TC_AUTH_TOKEN. Kept in localStorage and
+// Bearer token for servers started with MANIFOLD_AUTH_TOKEN. Kept in localStorage and
 // attached to every request; the AuthGate sets it after the user unlocks.
 export function getAuthToken() {
   return localStorage.getItem('tc.authToken') || '';

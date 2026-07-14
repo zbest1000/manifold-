@@ -19,7 +19,7 @@ const SNAPSHOT_MS = 60_000;
 const MAX_PER_BROKER = 1000; // snapshot cap per broker (ring itself may be larger)
 
 class HistoryStore {
-  constructor(mqttManager, dir = process.env.TC_DATA_DIR || path.join(__dirname, '..', 'data')) {
+  constructor(mqttManager, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data')) {
     this.manager = mqttManager;
     this.dir = dir;
     this.file = path.join(dir, 'history.json');

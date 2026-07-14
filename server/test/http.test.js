@@ -2,14 +2,14 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 
 // Boot the real app on an ephemeral port and exercise the HTTP surface.
-// Isolation matters: without TC_NO_RESTORE the app would reconnect whatever
+// Isolation matters: without MANIFOLD_NO_RESTORE the app would reconnect whatever
 // brokers a previous run persisted into the real data dir — live MQTT sockets
 // whose reconnect timers keep this test process alive forever (and make
-// "starts empty" assertions lie). Same for TC_DATA_DIR: point persistence at a
+// "starts empty" assertions lie). Same for MANIFOLD_DATA_DIR: point persistence at a
 // throwaway dir so the test never reads or pollutes real state.
 process.env.PORT = '0';
-process.env.TC_NO_RESTORE = '1';
-process.env.TC_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-http-test-'));
+process.env.MANIFOLD_NO_RESTORE = '1';
+process.env.MANIFOLD_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-http-test-'));
 let baseUrl;
 let server;
 let services;
