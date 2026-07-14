@@ -1,9 +1,9 @@
-// Thin REST client for the Topic Canvas backend. All calls are relative so the
+// Thin REST client for the Manifold backend. All calls are relative so the
 // Vite dev proxy (and production static serving) route them to the API.
 import { useStore } from '@/store/store';
 import { humanizeError } from '@/lib/humanizeError';
 
-// Bearer token for servers started with TC_AUTH_TOKEN. Kept in localStorage and
+// Bearer token for servers started with MANIFOLD_AUTH_TOKEN. Kept in localStorage and
 // attached to every request; the AuthGate sets it after the user unlocks.
 export function getAuthToken() {
   return localStorage.getItem('tc.authToken') || '';
@@ -73,6 +73,74 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filters, ...opts })
     }),
+  unsTree: (id, { prefix = '', depth = 4, maxNodes = 2000 } = {}) =>
+    request(
+      `/api/mqtt/brokers/${encodeURIComponent(id)}/uns/tree?prefix=${encodeURIComponent(prefix)}&depth=${depth}&maxNodes=${maxNodes}`
+    ),
+  unsLint: (id) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/uns/lint`),
+  unsEvents: (id, limit = 200) => request(`/api/mqtt/brokers/${encodeURIComponent(id)}/uns/events?limit=${limit}`),
+
+  // UNS mounts (external sources grafted into the namespace view)
+  listMounts: () => request('/api/uns/mounts'),
+  addMount: (mount) => request('/api/uns/mounts', { method: 'POST', body: JSON.stringify(mount) }),
+  removeMount: (id) => request(`/api/uns/mounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Historians (InfluxDB / Timebase)
+  listHistorians: () => request('/api/historians'),
+  saveHistorian: (h) => request('/api/historians', { method: 'POST', body: JSON.stringify(h) }),
+  deleteHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+
+  // Pipelines
+  listPipelines: () => request('/api/pipelines'),
+  savePipeline: (route) => request('/api/pipelines', { method: 'POST', body: JSON.stringify(route) }),
+  deletePipeline: (id) => request(`/api/pipelines/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  previewPipeline: (route, sampleLimit = 25) =>
+    request('/api/pipelines/preview', { method: 'POST', body: JSON.stringify({ route, sampleLimit }) }),
+
+  // Recorder + replay
+  listRecordings: () => request('/api/recorder'),
+  saveRecording: (rec) => request('/api/recorder', { method: 'POST', body: JSON.stringify(rec) }),
+  deleteRecording: (id) => request(`/api/recorder/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  recordingData: (id, params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/api/recorder/${encodeURIComponent(id)}/data${q ? `?${q}` : ''}`);
+  },
+  startReplay: (body) => request('/api/recorder/replay', { method: 'POST', body: JSON.stringify(body) }),
+  stopReplay: () => request('/api/recorder/replay', { method: 'DELETE' }),
+
+  // Schema contracts
+  listContracts: () => request('/api/contracts'),
+  inferContract: (brokerId, topic) =>
+    request('/api/contracts/infer', { method: 'POST', body: JSON.stringify({ brokerId, topic }) }),
+  saveContract: (c) => request('/api/contracts', { method: 'POST', body: JSON.stringify(c) }),
+  deleteContract: (id) => request(`/api/contracts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  contractViolations: (limit = 200) => request(`/api/contracts/violations?limit=${limit}`),
+
+  // Models
+  listModels: () => request('/api/models'),
+  saveModel: (m) => request('/api/models', { method: 'POST', body: JSON.stringify(m) }),
+  deleteModel: (id) => request(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Tag browser + bindings
+  tagSources: () => request('/api/tags/sources'),
+  tagBrowse: (type, id, node = '') =>
+    request(`/api/tags/browse?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}&node=${encodeURIComponent(node)}`),
+  listBindings: () => request('/api/tags/bindings'),
+  saveBinding: (b) => request('/api/tags/bindings', { method: 'POST', body: JSON.stringify(b) }),
+  deleteBinding: (id) => request(`/api/tags/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Config as code + audit
+  exportConfig: () => request('/api/system/config/export'),
+  importConfig: (cfg) => request('/api/system/config/import', { method: 'POST', body: JSON.stringify(cfg) }),
+  auditRecent: (limit = 100) => request(`/api/audit?limit=${limit}`),
+
+  // Alerts
+  listAlertRules: () => request('/api/alerts/rules'),
+  saveAlertRule: (rule) => request('/api/alerts/rules', { method: 'POST', body: JSON.stringify(rule) }),
+  deleteAlertRule: (id) => request(`/api/alerts/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  alertEvents: (limit = 200) => request(`/api/alerts/events?limit=${limit}`),
+
   topicTree: (id, prefix = '', limit = 500) =>
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}/topictree?prefix=${encodeURIComponent(prefix)}&limit=${limit}`),
   subscribe: (id, topic, qos = 0) =>

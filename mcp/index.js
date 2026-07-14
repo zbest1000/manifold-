@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
- * Topic Canvas MCP server.
+ * Manifold MCP server.
  *
  * Exposes the MQTT + OPC UA exploration backend as Model Context Protocol tools
  * so any MCP-capable client (Claude Desktop, IDE agents, etc.) can discover
  * brokers, browse topics, read live payloads, and walk an OPC UA address space.
  *
  * It is a thin, stateless bridge over the backend REST API — start the backend
- * first (default http://localhost:5000) and point TOPIC_CANVAS_API_URL at it.
+ * first (default http://localhost:5000) and point MANIFOLD_API_URL at it.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-const API_URL = (process.env.TOPIC_CANVAS_API_URL || 'http://localhost:5000').replace(/\/$/, '');
-// Matches the backend's TC_AUTH_TOKEN when the server runs authenticated.
-const AUTH_TOKEN = process.env.TC_AUTH_TOKEN || process.env.TOPIC_CANVAS_TOKEN || '';
+const API_URL = (process.env.MANIFOLD_API_URL || 'http://localhost:5000').replace(/\/$/, '');
+// Matches the backend's MANIFOLD_AUTH_TOKEN when the server runs authenticated.
+const AUTH_TOKEN = process.env.MANIFOLD_AUTH_TOKEN || '';
 
 async function api(path, options = {}) {
   const url = `${API_URL}${path}`;
@@ -30,7 +30,7 @@ async function api(path, options = {}) {
       }
     });
   } catch (error) {
-    throw new Error(`Cannot reach Topic Canvas backend at ${API_URL}: ${error.message}`);
+    throw new Error(`Cannot reach Manifold backend at ${API_URL}: ${error.message}`);
   }
   const text = await res.text();
   let body;
@@ -53,14 +53,14 @@ function fail(error) {
   return { isError: true, content: [{ type: 'text', text: `Error: ${error.message}` }] };
 }
 
-const server = new McpServer({ name: 'topic-canvas', version: '2.0.0' });
+const server = new McpServer({ name: 'manifold', version: '2.0.0' });
 
 // ---------------------------------------------------------------------------
 // System / discovery
 // ---------------------------------------------------------------------------
 server.tool(
   'system_status',
-  'Get the current status of the Topic Canvas backend: connected MQTT brokers, OPC UA endpoints, and discovery state.',
+  'Get the current status of the Manifold backend: connected MQTT brokers, OPC UA endpoints, and discovery state.',
   {},
   async () => {
     try {
@@ -242,6 +242,153 @@ server.tool(
     try {
       const q = new URLSearchParams({ ...(prefix ? { prefix } : {}), ...(limit ? { limit: String(limit) } : {}) });
       return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/topictree?${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'uns_tree',
+  'Nested Unified Namespace tree observed on a broker (depth- and node-capped skeleton). Every node carries its exact subtree topic count even when children are cut off, so large namespaces summarize honestly. Use prefix to drill below the cut.',
+  {
+    brokerId: z.string(),
+    prefix: z.string().optional().describe('Start below this path instead of the namespace root.'),
+    depth: z.number().optional().describe('Levels to expand (default 4, max 12).'),
+    maxNodes: z.number().optional().describe('Total node cap (default 2000, max 10000).')
+  },
+  async ({ brokerId, prefix, depth, maxNodes }) => {
+    try {
+      const q = new URLSearchParams({
+        ...(prefix ? { prefix } : {}),
+        ...(depth ? { depth: String(depth) } : {}),
+        ...(maxNodes ? { maxNodes: String(maxNodes) } : {})
+      });
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/uns/tree?${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'uns_lint',
+  'UNS conformance lint over the observed namespace: mixed naming conventions among siblings, payloads on branch nodes, empty segments, whitespace in names, redundant single-child chains, uneven leaf depth. Returns a 0-100 score, bounded findings, and exact per-rule counts.',
+  { brokerId: z.string() },
+  async ({ brokerId }) => {
+    try {
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/uns/lint`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'uns_events',
+  'Namespace event feed for a broker, newest first: new topics appearing plus Sparkplug BIRTH/DEATH lifecycle events (edge nodes and devices coming online/offline, including cascaded device deaths).',
+  {
+    brokerId: z.string(),
+    limit: z.number().optional().describe('Max events (default 200, max 2000).')
+  },
+  async ({ brokerId, limit }) => {
+    try {
+      const q = limit ? `?limit=${Number(limit)}` : '';
+      return ok(await api(`/api/mqtt/brokers/${encodeURIComponent(brokerId)}/uns/events${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'pipelines_list',
+  'DataOps pipeline routes (source → transforms → target) with live per-route metrics: matched/published/error counts, loop-blocked messages, last error.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/pipelines'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'pipeline_preview',
+  'Dry-run a pipeline route against the topics actually observed on a broker: exact match count and the in→out topic/payload mapping after transforms. Nothing is published. Route shape: { source: {brokerId, filter}, transforms: [...], target: {...} }.',
+  {
+    route: z.object({}).passthrough().describe('Route definition: { source: {brokerId, filter}, transforms?, target }'),
+    sampleLimit: z.number().optional()
+  },
+  async ({ route, sampleLimit }) => {
+    try {
+      return ok(await api('/api/pipelines/preview', { method: 'POST', body: JSON.stringify({ route, sampleLimit }) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'historians_list',
+  'Configured historian connections (InfluxDB v2, Timebase) that pipelines and the recorder can write time-series into. Secrets are redacted.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/historians'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contracts_violations',
+  'Recent schema-contract violations: payload drift (missing fields, new fields, type changes) on topics whose shape was locked. Newest first.',
+  { limit: z.number().optional() },
+  async ({ limit }) => {
+    try {
+      return ok(await api(`/api/contracts/violations${limit ? `?limit=${Number(limit)}` : ''}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'models_list',
+  'Contextualization models: multi-source attribute bindings published as merged objects at UNS paths, with publish/error status.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/models'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'bindings_list',
+  'Tag bindings: device tags (OPC UA nodes, Sparkplug metrics) bound into the UNS, with per-binding publish/deadband/error status and Sparkplug edge-node session state.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/tags/bindings'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'audit_recent',
+  'Recent audit-trail entries: every mutating API call and control socket event (role, route, outcome), newest first. Requires the admin token.',
+  { limit: z.number().optional() },
+  async ({ limit }) => {
+    try {
+      return ok(await api(`/api/audit${limit ? `?limit=${Number(limit)}` : ''}`));
     } catch (error) {
       return fail(error);
     }
@@ -638,4 +785,4 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`Topic Canvas MCP server running (backend: ${API_URL})`);
+console.error(`Manifold MCP server running (backend: ${API_URL})`);

@@ -53,7 +53,7 @@ class OpcuaManager extends EventEmitter {
     }
 
     const client = OPCUAClient.create({
-      applicationName: 'TopicCanvas',
+      applicationName: 'Manifold',
       endpointMustExist: false,
       securityMode: MessageSecurityMode[config.securityMode] ?? MessageSecurityMode.None,
       securityPolicy: SecurityPolicy[config.securityPolicy] ?? SecurityPolicy.None,
@@ -192,7 +192,7 @@ class OpcuaManager extends EventEmitter {
     );
 
     item.on('changed', (dataValue) => {
-      this.io.emit('opcua-value', {
+      const evt = {
         connectionId,
         nodeId,
         value: toPlainValue(dataValue.value?.value),
@@ -200,7 +200,10 @@ class OpcuaManager extends EventEmitter {
         status: dataValue.statusCode.toString(),
         sourceTimestamp: dataValue.sourceTimestamp || null,
         serverTimestamp: dataValue.serverTimestamp || null
-      });
+      };
+      this.io.emit('opcua-value', evt);
+      // In-process tap for the tag binding engine (socket clients aside).
+      this.emit('value', evt);
     });
 
     entry.monitored.set(nodeId, item);

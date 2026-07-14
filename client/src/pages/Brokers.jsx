@@ -23,6 +23,7 @@ const BLANK = {
   maxReconnect: 0,
   cleanSession: true,
   autoSubscribe: true,
+  subscribeQos: 1,
   rejectUnauthorized: true
 };
 
@@ -53,6 +54,7 @@ export default function Brokers() {
         maxReconnect: Number(form.maxReconnect) || 0,
         cleanSession: form.cleanSession,
         autoSubscribe: form.autoSubscribe,
+        subscribeQos: Number(form.subscribeQos),
         rejectUnauthorized: form.rejectUnauthorized
       });
       toast.success('Connecting to broker…');
@@ -148,6 +150,22 @@ export default function Brokers() {
                     disabled={!form.reconnect}
                     onChange={(e) => setForm({ ...form, reconnectPeriod: e.target.value })}
                   />
+                </Field>
+                <Field label="Subscribe QoS (intake durability)">
+                  <select
+                    value={form.subscribeQos}
+                    onChange={(e) => setForm({ ...form, subscribeQos: e.target.value })}
+                    className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200"
+                  >
+                    <option value={0}>QoS 0 — fire and forget</option>
+                    <option value={1}>QoS 1 — at least once (default)</option>
+                    <option value={2}>QoS 2 — exactly once</option>
+                  </select>
+                  <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                    If the broker refuses the wildcard grant, intake retries at QoS 0 automatically. Note: stock EMQX
+                    <em> silently</em> denies '#' at QoS 1+ (default ACL + deny_action=ignore) — allow it in the broker
+                    ACL, or pick QoS 0 here if no data appears.
+                  </p>
                 </Field>
                 <Field label="Max reconnect attempts (0 = unlimited)">
                   <Input

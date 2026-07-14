@@ -197,6 +197,43 @@ router.get('/brokers/:brokerId/topictree', (req, res) => {
   res.json(mqttManager.getTopicChildren(req.params.brokerId, req.query.prefix || '', { limit }));
 });
 
+// GET /api/mqtt/brokers/:brokerId/uns/tree?prefix=&depth=4&maxNodes=2000
+// Nested namespace skeleton for the UNS module and MCP. Depth/node-capped;
+// every node carries its exact subtree topic count even when children are cut.
+router.get('/brokers/:brokerId/uns/tree', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  const result = mqttManager.getUnsTree(req.params.brokerId, {
+    prefix: req.query.prefix || '',
+    depth: Math.min(Number(req.query.depth) || 4, 12),
+    maxNodes: Math.min(Number(req.query.maxNodes) || 2000, 10000)
+  });
+  res.json(result);
+});
+
+// GET /api/mqtt/brokers/:brokerId/uns/lint — namespace conformance report
+// (naming consistency, data-on-branch, empty segments, depth spread...).
+router.get('/brokers/:brokerId/uns/lint', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  res.json(mqttManager.lintNamespace(req.params.brokerId));
+});
+
+// GET /api/mqtt/brokers/:brokerId/uns/events?limit=200 — namespace event feed:
+// new-topic appearances + Sparkplug BIRTH/DEATH lifecycle, newest first.
+router.get('/brokers/:brokerId/uns/events', (req, res) => {
+  const { mqttManager } = req.app.locals.services;
+  if (!mqttManager.getConnection(req.params.brokerId)) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  const limit = Math.min(Number(req.query.limit) || 200, 2000);
+  res.json(mqttManager.getNamespaceEvents(req.params.brokerId, { limit }));
+});
+
 // POST /api/mqtt/brokers/:brokerId/subscribe { topic, qos }
 router.post('/brokers/:brokerId/subscribe', (req, res) => {
   const { mqttManager } = req.app.locals.services;

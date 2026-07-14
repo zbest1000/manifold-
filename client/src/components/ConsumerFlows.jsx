@@ -29,6 +29,10 @@ export default function ConsumerFlows({ broker }) {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(null);
   const graphRef = useRef(null);
+  // Per-client traffic rates, derived by diffing the admin API's cumulative
+  // counters between two refreshes (EMQX exposes them; HiveMQ doesn't).
+  const countersRef = useRef(new Map()); // clientId -> { msgsIn, msgsOut, ts }
+  const [clientRates, setClientRates] = useState(new Map());
 
   const refreshConfig = useCallback(async () => {
     if (!broker?.id) return;
@@ -55,6 +59,23 @@ export default function ConsumerFlows({ broker }) {
       const res = await api.brokerAdminPubSub(broker.id, { resolve: true, sampleLimit: 50 });
       setData(res);
       setExpanded(new Map());
+      // Roll cumulative counters into per-client msg/s across refreshes.
+      const now = Date.now();
+      const rates = new Map();
+      for (const c of res.clients || []) {
+        const cur = c.counters;
+        if (!cur || cur.msgsIn == null) continue;
+        const prev = countersRef.current.get(c.id);
+        if (prev && now > prev.ts) {
+          const dt = (now - prev.ts) / 1000;
+          rates.set(c.id, {
+            inRate: Math.max(0, (cur.msgsIn - prev.msgsIn) / dt),
+            outRate: Math.max(0, ((cur.msgsOut ?? 0) - (prev.msgsOut ?? 0)) / dt)
+          });
+        }
+        countersRef.current.set(c.id, { msgsIn: cur.msgsIn, msgsOut: cur.msgsOut ?? 0, ts: now });
+      }
+      setClientRates(rates);
     } catch (e) {
       setError(e.message || 'Failed to reach broker admin API');
     } finally {
@@ -157,7 +178,14 @@ export default function ConsumerFlows({ broker }) {
                 className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200"
               >
                 <option value="emqx">EMQX v5 (REST)</option>
+                <option value="hivemq">HiveMQ Enterprise (REST)</option>
               </select>
+              {form.type === 'hivemq' && (
+                <p className="mt-1 text-[10px] leading-snug text-slate-500">
+                  Base URL of the HiveMQ REST API (e.g. http://broker-host:8888). Leave key empty; put a bearer token in
+                  the secret field if the API requires one.
+                </p>
+              )}
             </Field>
             <Field label="API base URL">
               <Input placeholder="http://broker-host:18083/api/v5" value={form.url} onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))} required />
@@ -262,6 +290,10 @@ export default function ConsumerFlows({ broker }) {
             <div className="space-y-1 text-xs text-slate-400">
               {selNode.meta.username && <Row k="Username" v={selNode.meta.username} />}
               {selNode.meta.ip && <Row k="IP" v={selNode.meta.ip} />}
+              <ClientTraffic
+                client={(data?.clients || []).find((c) => `ps:${broker.id}:c:${c.id}` === selNode.id)}
+                rate={clientRates.get(selNode.label)}
+              />
             </div>
             <div className="mt-2 space-y-1">
               {(data?.subscriptions || [])
@@ -327,6 +359,23 @@ export default function ConsumerFlows({ broker }) {
         )}
       </div>
     </div>
+  );
+}
+
+// Cumulative counters always; live msg/s appears from the second refresh on
+// (rates are the delta between two admin snapshots).
+function ClientTraffic({ client, rate }) {
+  const c = client?.counters;
+  if (!c || c.msgsIn == null) return null;
+  return (
+    <>
+      <Row k="Msgs in / out" v={`${c.msgsIn.toLocaleString()} / ${(c.msgsOut ?? 0).toLocaleString()}`} />
+      {rate ? (
+        <Row k="Rate in / out" v={`${rate.inRate.toFixed(1)} / ${rate.outRate.toFixed(1)} msg/s`} />
+      ) : (
+        <p className="text-[10px] text-slate-500">refresh again for live rates</p>
+      )}
+    </>
   );
 }
 

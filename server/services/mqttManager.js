@@ -6,6 +6,7 @@ const SparkplugRegistry = require('./sparkplugRegistry');
 const TopicStore = require('./topicStore');
 const TopicTrie = require('./topicTrie');
 const brokerAdmin = require('./brokerAdmin');
+const { lintTrie } = require('./unsLint');
 
 const STATS_INTERVAL_MS = 2000;
 const MESSAGE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -32,6 +33,8 @@ class MqttManager extends EventEmitter {
     this.tries = new Map(); // brokerId -> { trie, indexedThrough } (lazy; built on first resolve)
     this.sys = new Map(); // brokerId -> Set($SYS topic) — keeps /sys reads O(sys), not O(topics)
     this.recent = new Map(); // brokerId -> recent message ring (bounded)
+    this.topicMeta = new Map(); // brokerId -> Array(slot -> {type, spark}) — a topic's classification never changes
+    this.rowCache = new Map(); // brokerId -> Map(slot -> { count, row }) — read-path decode cache
     this.msgSeq = 0; // fast monotonic id (avoids uuid per message on the hot path)
     this.subscriptions = new Map(); // brokerId -> Set(topic filters)
     this.sparkplugDecoder = new SparkplugDecoder();
@@ -58,7 +61,7 @@ class MqttManager extends EventEmitter {
 
     const port = Number(config.port) || (config.protocol === 'mqtts' ? 8883 : 1883);
     const protocol = config.protocol || (port === 8883 ? 'mqtts' : 'mqtt');
-    const clientId = config.clientId || `topic-canvas_${Date.now()}`;
+    const clientId = config.clientId || `manifold_${Date.now()}`;
     const brokerUrl = `${protocol}://${config.host}:${port}`;
 
     const options = {
@@ -91,6 +94,10 @@ class MqttManager extends EventEmitter {
       clientId,
       username: config.username || null,
       autoSubscribe: config.autoSubscribe !== false,
+      // Intake durability: QoS 0 subscriptions silently shed messages under
+      // broker pressure — no pipeline can be more reliable than its intake, so
+      // the explorer subscription defaults to QoS 1.
+      subscribeQos: [0, 1, 2].includes(Number(config.subscribeQos)) ? Number(config.subscribeQos) : 1,
       // 0 = reconnect forever (mqtt.js default); >0 = give up after N attempts.
       maxReconnect: Number(config.maxReconnect) > 0 ? Number(config.maxReconnect) : 0,
       reconnectCount: 0,
@@ -111,9 +118,11 @@ class MqttManager extends EventEmitter {
     this.connections.set(brokerId, info);
     this.clients.set(brokerId, client);
     this.stores.set(brokerId, new TopicStore(MAX_TOPICS));
+    this.topicMeta.set(brokerId, []);
     this.sparkplug.set(brokerId, new SparkplugRegistry());
     this.sys.set(brokerId, new Set());
     this.recent.set(brokerId, []);
+    this.rowCache.set(brokerId, new Map());
     this.subscriptions.set(brokerId, new Set());
     this.setupClientEventHandlers(client, brokerId);
 
@@ -132,10 +141,11 @@ class MqttManager extends EventEmitter {
       this.io.emit('mqtt-connected', { brokerId, connection: this.publicInfo(info) });
 
       if (info.autoSubscribe) {
-        this.subscribe(brokerId, '#', 0);
+        this.subscribe(brokerId, '#', info.subscribeQos);
         // `#` does not match topics beginning with `$` (MQTT spec), so subscribe
         // to the broker's `$SYS` tree separately for audit/health stats. Brokers
-        // that don't publish `$SYS` simply deliver nothing here.
+        // that don't publish `$SYS` simply deliver nothing here ($SYS stays QoS 0
+        // — it's periodic diagnostics, losing one sample is meaningless).
         this.subscribe(brokerId, '$SYS/#', 0);
       }
     });
@@ -211,10 +221,24 @@ class MqttManager extends EventEmitter {
       payloadFormat = 'json';
     } catch {
       payload = text;
-      if (/�/.test(text)) {
+      if (text.includes('�')) {
         payloadFormat = 'binary';
         payload = message.toString('base64');
       }
+    }
+
+    // Topic classification is a pure function of the topic string — cache it
+    // by slot instead of re-running the substring scans per flushed message.
+    let meta;
+    const metaArr = this.topicMeta.get(brokerId);
+    if (metaArr && row.slot !== undefined) {
+      meta = metaArr[row.slot];
+      if (!meta) {
+        meta = { type: this.detectMessageType(row.topic, payload), spark: this.isSparkplugTopic(row.topic) };
+        metaArr[row.slot] = meta;
+      }
+    } else {
+      meta = { type: this.detectMessageType(row.topic, payload), spark: this.isSparkplugTopic(row.topic) };
     }
 
     const messageObj = {
@@ -227,10 +251,10 @@ class MqttManager extends EventEmitter {
       retain: row.retain,
       timestamp: new Date(row.ts).toISOString(),
       size: message.length,
-      type: this.detectMessageType(row.topic, payload)
+      type: meta.type === 'json' || meta.type === 'text' ? (typeof payload === 'object' && payload !== null ? 'json' : 'text') : meta.type
     };
 
-    if (this.isSparkplugTopic(row.topic)) {
+    if (meta.spark) {
       try {
         messageObj.sparkplug = this.sparkplugDecoder.decode(message);
         messageObj.type = 'sparkplug';
@@ -259,8 +283,11 @@ class MqttManager extends EventEmitter {
     let forwarded = 0;
     let lastActivity = null;
 
+    const tap = this.listenerCount('message') > 0;
     for (const row of rows) {
       const messageObj = this.buildMessage(brokerId, row);
+      // Split once here; every tap engine matches on segments.
+      if (tap) messageObj.topicParts = messageObj.topic.split('/');
       lastActivity = messageObj.timestamp;
 
       // Fold Sparkplug traffic into the device topology (identity from the topic,
@@ -268,6 +295,11 @@ class MqttManager extends EventEmitter {
       if (registry && this.isSparkplugTopic(messageObj.topic)) {
         registry.update(messageObj.topic, messageObj.sparkplug || null, row.ts);
       }
+
+      // Message tap for the DataOps engines (pipelines, recorder, contracts,
+      // models). Fires on the coalesced stream — bounded by topics touched per
+      // flush, not raw publish rate — and costs one branch when nobody listens.
+      if (tap) this.emit('message', messageObj);
 
       if (forwarded < FORWARD_CAP) {
         batch.push(messageObj);
@@ -282,7 +314,9 @@ class MqttManager extends EventEmitter {
     const info = this.connections.get(brokerId);
     if (info && lastActivity) info.lastActivity = new Date(lastActivity);
 
-    if (batch.length) this.io.emit('mqtt-messages', batch);
+    // Serializing the batch for zero sockets is pure waste (headless deploys,
+    // MCP-only usage) — skip the emit when nobody is listening.
+    if (batch.length && (this.io.engine?.clientsCount ?? 1) > 0) this.io.emit('mqtt-messages', batch);
   }
 
   flushBatches() {
@@ -292,6 +326,30 @@ class MqttManager extends EventEmitter {
   subscribe(brokerId, topic, qos = 0) {
     const client = this.requireClient(brokerId);
     client.subscribe(topic, { qos }, (error, granted) => {
+      // A broker can accept the packet but refuse the grant (SUBACK 0x80).
+      // Stock EMQX does exactly this for QoS 1+ subscriptions to bare '#'
+      // (its default ACL allows them only at QoS 0) — without a fallback the
+      // explorer would sit connected and silently ingest nothing. mqtt.js
+      // surfaces the refusal as an error carrying the SUBACK packet (granted
+      // codes >= 128); older versions reported it via granted[].qos === 128.
+      const refused =
+        (Array.isArray(error?.packet?.granted) && error.packet.granted.some((c) => c >= 128)) ||
+        (!error && granted?.length && granted.every((g) => g.qos === 128));
+      if (refused) {
+        if (qos > 0) {
+          this.io.emit('subscription-downgraded', {
+            brokerId,
+            topic,
+            from: qos,
+            to: 0,
+            reason: 'broker refused the grant at this QoS (SUBACK 0x80) — retrying at QoS 0'
+          });
+          this.subscribe(brokerId, topic, 0);
+        } else {
+          this.io.emit('subscription-error', { brokerId, topic, error: 'subscription refused by broker (SUBACK 0x80)' });
+        }
+        return;
+      }
       if (error) {
         this.io.emit('subscription-error', { brokerId, topic, error: error.message });
         return;
@@ -348,11 +406,13 @@ class MqttManager extends EventEmitter {
     }
     this.connections.delete(brokerId);
     this.stores.delete(brokerId);
+    this.topicMeta.delete(brokerId);
     this.sparkplug.delete(brokerId);
     this.admin.delete(brokerId);
     this.tries.delete(brokerId);
     this.sys.delete(brokerId);
     this.recent.delete(brokerId);
+    this.rowCache.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
     return { brokerId, status: 'disconnected' };
@@ -429,9 +489,17 @@ class MqttManager extends EventEmitter {
     const store = this.stores.get(brokerId);
     if (!store) return { topics: [], total: 0, dropped: 0 };
 
+    // Read-path decode cache: on large brokers most topics are idle between
+    // snapshot calls (retained config, birth certificates, slow sensors), so the
+    // JSON parse + type detection from the previous call is still valid. A row's
+    // `count` increments on every ingest, making it a perfect version stamp:
+    // cache the projected object per slot and reuse it while count is unchanged.
+    const cache = this.rowCache.get(brokerId);
     const topics = store.getTopics(limit).map((row) => {
+      const hit = cache?.get(row.slot);
+      if (hit && hit.count === row.count) return hit.obj;
       const msg = this.buildMessage(brokerId, row);
-      return {
+      const obj = {
         topic: row.topic,
         messageCount: row.count,
         lastActivity: msg.timestamp,
@@ -440,6 +508,8 @@ class MqttManager extends EventEmitter {
         retain: msg.retain,
         payload: msg.payload
       };
+      cache?.set(row.slot, { count: row.count, obj });
+      return obj;
     });
     return { topics, total: store.topicCount(), dropped: store.dropped };
   }
@@ -612,6 +682,111 @@ class MqttManager extends EventEmitter {
     return out;
   }
 
+  // ---- UNS namespace services ----------------------------------------------
+
+  /** UNS conformance lint over the observed namespace (see unsLint.js). */
+  lintNamespace(brokerId, opts = {}) {
+    const trie = this.getTrie(brokerId);
+    if (!trie) return null;
+    return lintTrie(trie, opts);
+  }
+
+  /**
+   * Namespace event feed: new-topic appearances (from the store) merged with
+   * Sparkplug BIRTH/DEATH lifecycle events (from the registry), newest first.
+   * Both sources are bounded rings, so this is O(events), never O(topics).
+   */
+  getNamespaceEvents(brokerId, { limit = 200 } = {}) {
+    const store = this.stores.get(brokerId);
+    if (!store) return null;
+    const registry = this.sparkplug.get(brokerId);
+    const merged = [...store.events, ...(registry?.events || [])];
+    merged.sort((a, b) => b.ts - a.ts);
+    return {
+      events: merged.slice(0, limit),
+      total: merged.length,
+      truncated: merged.length > limit
+    };
+  }
+
+  /**
+   * Nested topic-tree summary for the UNS module and MCP (`uns_tree`). Depth-
+   * and node-capped so a multimillion-topic broker returns a bounded skeleton:
+   * every returned node carries its exact subtreeCount even when its children
+   * are cut off, so nothing is silently hidden.
+   */
+  getUnsTree(brokerId, { depth = 4, maxNodes = 2000, prefix = '' } = {}) {
+    const store = this.stores.get(brokerId);
+    const trie = this.getTrie(brokerId);
+    if (!store || !trie) return null;
+
+    let root = trie.root;
+    if (prefix) {
+      for (const seg of String(prefix).split('/')) {
+        root = root.children?.get(seg);
+        if (!root) return { prefix, nodes: [], total: store.topicCount(), truncated: false };
+      }
+    }
+
+    let used = 0;
+    let truncated = false;
+    const build = (node, path, name, d) => {
+      used++;
+      const out = {
+        name,
+        path,
+        count: node.subtreeCount,
+        isTopic: node.slot >= 0
+      };
+      if (node.slot >= 0) {
+        out.ts = store.ts[node.slot];
+        out.msgCount = store.count[node.slot];
+      }
+      if (node.children && d < depth) {
+        const kids = [];
+        for (const [seg, child] of node.children) {
+          if (!path && seg.startsWith('$')) continue; // $SYS etc. is broker plumbing, not namespace
+          if (used >= maxNodes) { truncated = true; break; }
+          kids.push(build(child, path ? `${path}/${seg}` : seg, seg, d + 1));
+        }
+        if (kids.length) out.children = kids;
+      } else if (node.children && node.children.size > 0) {
+        truncated = true; // depth-cut: subtreeCount still tells the whole story
+      }
+      return out;
+    };
+
+    const nodes = [];
+    for (const [seg, child] of root.children || []) {
+      if (!prefix && seg.startsWith('$')) continue;
+      if (used >= maxNodes) { truncated = true; break; }
+      nodes.push(build(child, prefix ? `${prefix}/${seg}` : seg, seg, 1));
+    }
+    return { prefix, nodes, total: store.topicCount(), truncated };
+  }
+
+  /** Newest message ts anywhere under `path` ('' = whole namespace). O(subtree). */
+  branchLastActivity(brokerId, path = '') {
+    const store = this.stores.get(brokerId);
+    const trie = this.getTrie(brokerId);
+    if (!store || !trie) return null;
+    let node = trie.root;
+    if (path) {
+      for (const seg of String(path).split('/')) {
+        node = node.children?.get(seg);
+        if (!node) return 0; // branch never observed
+      }
+    }
+    let max = 0;
+    const stack = [node];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n.slot >= 0 && store.ts[n.slot] > max) max = store.ts[n.slot];
+      if (n.children) for (const c of n.children.values()) stack.push(c);
+    }
+    return max;
+  }
+
   shutdown() {
     clearInterval(this.cleanupTimer);
     clearInterval(this.statsTimer);
@@ -620,11 +795,13 @@ class MqttManager extends EventEmitter {
     this.clients.clear();
     this.connections.clear();
     this.stores.clear();
+    this.topicMeta.clear();
     this.sparkplug.clear();
     this.admin.clear();
     this.tries.clear();
     this.sys.clear();
     this.recent.clear();
+    this.rowCache.clear();
   }
 }
 

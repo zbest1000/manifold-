@@ -45,6 +45,55 @@ test('mqttManager.detectMessageType classifies by topic and payload', () => {
   m.shutdown();
 });
 
+test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the grant', () => {
+  const events = [];
+  const m = new MqttManager({ emit: (ev, data) => events.push({ ev, data }) });
+  // Fake client mimicking stock EMQX through mqtt.js: '#' at QoS 1+ → the
+  // callback gets an ERROR carrying the SUBACK packet with granted [128]
+  // (granted arg still echoes the request); QoS 0 → granted normally.
+  const calls = [];
+  const refusal = (topic, qos) => {
+    const err = new Error('Subscribe error: Unspecified error');
+    err.packet = { cmd: 'suback', granted: [128] };
+    return [err, [{ topic, qos }]];
+  };
+  m.clients.set('b1', {
+    subscribe(topic, opts, cb) {
+      calls.push({ topic, qos: opts.qos });
+      if (opts.qos > 0) cb(...refusal(topic, opts.qos));
+      else cb(null, [{ topic, qos: 0 }]);
+    },
+    end() {}
+  });
+  m.subscriptions.set('b1', new Set());
+  m.connections.set('b1', { status: 'connected' }); // requireClient checks live status
+
+  m.subscribe('b1', '#', 1);
+  assert.deepStrictEqual(calls, [
+    { topic: '#', qos: 1 },
+    { topic: '#', qos: 0 }
+  ]);
+  assert.ok(m.subscriptions.get('b1').has('#'), 'fallback subscription must be recorded');
+  assert.ok(events.some((e) => e.ev === 'subscription-downgraded' && e.data.from === 1 && e.data.to === 0));
+  assert.ok(events.some((e) => e.ev === 'subscription-success' && e.data.qos === 0));
+
+  // Refused even at QoS 0 → surfaced as an error, not silence.
+  m.subscriptions.get('b1').clear();
+  events.length = 0;
+  m.clients.set('b1', {
+    subscribe(topic, opts, cb) {
+      const err = new Error('Subscribe error: Not authorized');
+      err.packet = { cmd: 'suback', granted: [135] };
+      cb(err, [{ topic, qos: opts.qos }]);
+    },
+    end() {}
+  });
+  m.subscribe('b1', '$SYS/#', 0);
+  assert.ok(events.some((e) => e.ev === 'subscription-error' && /refused/.test(e.data.error)));
+  assert.ok(!m.subscriptions.get('b1').has('$SYS/#'));
+  m.shutdown();
+});
+
 test('cesmiiClient requires full configuration', () => {
   const c = new CesmiiClient();
   assert.strictEqual(c.isConfigured(), false);

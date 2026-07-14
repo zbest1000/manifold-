@@ -2,7 +2,7 @@
   "name": "tc-simulator",
   "version": "1.0.0",
   "private": true,
-  "description": "Publishes demo MQTT + Sparkplug B traffic for Topic Canvas",
+  "description": "Publishes demo MQTT + Sparkplug B traffic for Manifold",
   "type": "commonjs",
   "dependencies": {
     "mqtt": "^5.3.4",

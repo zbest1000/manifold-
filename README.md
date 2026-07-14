@@ -1,276 +1,94 @@
-# Topic Canvas
+# Manifold
 
-**A node-graph explorer for MQTT and OPC UA networks.**
+Industrial data explorer and DataOps toolkit: MQTT, Sparkplug B, OPC UA, CESMII SMIP, and i3X, with a live Unified Namespace view.
 
-Topic Canvas connects to MQTT brokers and OPC UA servers, streams their data in
-real time, and renders the topic namespace / address space as an interactive,
-force-directed **node graph** with a live data panel. It ships with a
-**Model Context Protocol (MCP) server** so AI assistants and agents can drive the
-same backend programmatically.
+Manifold connects to brokers and servers, streams their data in real time, and renders it as a live UNS topology, interactive topic/address-space graphs, and producer → topic → consumer lineage. A DataOps layer routes and reshapes the stream: pipelines, contextualization models, historian delivery with store-and-forward, recording/replay, schema contracts, and tag bindings with a Sparkplug B publisher. An included MCP server exposes the same backend to AI agents.
 
-There is no built-in "AI assistant" chat or mock data — the app does real
-protocol work and exposes it cleanly. If you want AI in the loop, point any
-MCP-capable client at the included MCP server.
+## Features
 
----
+**Explore**
+- MQTT topic tree, 2D/3D graphs, and a WebGL renderer for very large namespaces (60k+ topics). JSON, text, binary, and Sparkplug B payloads decoded.
+- OPC UA address-space browsing with live monitored values.
+- Producer/consumer lineage: Sparkplug topology from BIRTH/DEATH certificates, per-client subscriptions from broker admin APIs (EMQX, HiveMQ), wildcard filters resolved against observed topics.
+- Network discovery by CIDR scan with protocol handshake verification.
+- Message history survives restarts; any two payloads can be diffed structurally.
 
-## Highlights
+**Unified Namespace**
+- Live ISA-95 topology built from observed traffic: values on leaves, per-branch message rates, publishing edges animated.
+- Per-topic staleness calibrated to each topic's own publish cadence.
+- Namespace lint (0–100 score with structural findings), event feed (new topics, Sparkplug lifecycle), editable level ladder, and mounts for OPC UA / i3X sources.
 
-- **Live MQTT exploration** — connect to any broker (TCP or TLS), auto-subscribe,
-  and watch topics populate. JSON, plain-text, binary and **Sparkplug B** payloads
-  are detected and decoded.
-- **OPC UA browsing** — connect to an `opc.tcp://` endpoint, walk the address space
-  as a graph, read node attributes, and monitor live variable values.
-- **Three views of every broker** — a classic collapsible **topic tree** (live
-  values with change-flash, retained flags, per-branch counts, sort + filter,
-  publish with QoS/retain, clear-retained, copy, inline plot), an interactive 2D
-  **node graph**, and a **3D graph** you orbit with the mouse (drag to rotate
-  both axes, scroll to zoom) to reach any node. Switch with one toggle.
-- **Node-graph visualization** — a smooth canvas force graph with pan/zoom, drag,
-  hover-highlight and selection. Nodes scale by connectivity; branches and leaves
-  are colored by message/node type. Stays at 60fps with thousands of topics
-  because high-frequency message data is kept out of the React render path.
-- **Live message flow** — with a broker connected, incoming messages animate as
-  dots travelling from the broker out to their topic node, active nodes pulse, and
-  busy topics glow brighter — so you can *see* what your network is doing. Toggle
-  it from the graph toolbar (persists across sessions).
-- **Selectable visual styles** — pick from six hand-tuned graph themes
-  (Constellation, Blueprint, Aurora, Neon, Circuit, Slate). Your choice persists
-  across sessions.
-- **Live and computed layouts** — interactive physics layouts (Organic, Spacious,
-  Tight, Radial, Tree, Cluster) run in the browser, while *computed* layouts
-  (Hierarchy, Layered, Balanced, Radial+, Circular, Scalable) are calculated
-  server-side by **Graphviz** (`dot`/`sfdp`/`twopi`/`circo`) and **Cytoscape**
-  (`fcose`) and applied as fixed coordinates — clean hierarchy and cluster-aware
-  layouts without a second rendering engine on the frontend. OPC UA and i3X graphs
-  default to the hierarchical `dot` layout; the MQTT graph has a one-click
-  **Beautify** action.
-- **Show-all at massive scale** — a "show all" toggle renders every topic as a
-  node on a lean WebGL renderer (verified at 63k+ nodes, responsive pan/zoom)
-  with viewport-culled, zoom-aware **labels**, connection lines, and a
-  **label-density slider** (off → dense). A **Force layout** button computes an
-  organic, force-directed arrangement server-side (Graphviz `sfdp`, up to 30k
-  nodes) — the classic "network graph" look at scale, instead of the
-  deterministic radial default.
-- **Flows: producer → topic → consumer lineage** — live visibility into who
-  publishes and who receives what on a broker.
-  - *Producers* — the real publishing endpoints of Sparkplug traffic:
-    **Group → Edge Node → Device**, reconstructed from BIRTH/DEATH certificates
-    (`spBv1.0/…`), with live online/offline state (edge death cascades to its
-    devices, per spec), the metric set each endpoint publishes, and — when an
-    admin API is connected — **who consumes each endpoint's data**. Alongside it,
-    a **broker `$SYS` health panel** (clients, subscriptions, throughput, uptime).
-  - *Consumers, with wildcards resolved* — a subscription filter is a query, not
-    a destination: two clients on `spBv1.0/#` can effectively receive completely
-    different concrete topics. The Consumers tab fetches per-client subscriptions
-    from a **broker admin API** (EMQX v5 REST; key stored server-side) and
-    **resolves every filter against the actually-observed topic set** using a
-    server-side topic trie: exact match counts (never truncated), covering
-    subtree roots, and drill-down to the concrete leaf topics — with proper MQTT
-    semantics (`+`/`#` levels, root wildcards excluding `$`-topics, `$share`
-    groups). Dormant filters (matching nothing) are flagged — dead wiring is a
-    finding. A **"show coverage on topic map"** action paints exactly what a
-    client receives onto the main topic graph.
-  - *Honesty:* MQTT and `$SYS` expose only aggregate counts; per-client
-    subscriptions require the admin API, and the UI says so plainly rather than
-    implying it can see more than MQTT allows.
-- **Honest network discovery** — TCP port probing across a CIDR range, each hit
-  verified with a real protocol handshake. No fabricated results.
-- **CESMII SMIP integration** — connect to a Smart Manufacturing Innovation Platform
-  instance (two-step JWT handshake handled server-side), list equipment and
-  attributes, and pull historical time-series with an inline sparkline.
-- **i3X integration** — connect to a CESMII i3X server (the Common Contextual
-  Manufacturing Information API), discover its namespaces and objects, and
-  visualize the object/relationship graph with live values and history. i3X
-  servers are also auto-detected during network discovery.
-- **MCP server** — expose MQTT, OPC UA, CESMII and i3X tools to Claude Desktop, IDE
-  agents, or any MCP client.
+**DataOps**
+- Pipelines: filter → transform chain (repath, pick/rename/set, scale, numeric, Sparkplug flatten, TVQ envelope) → broker or historian, with a dry-run preview against live topics and two-layer loop protection.
+- Models: merge fields from many topics into one object at a clean UNS path.
+- Historians: InfluxDB v2, TimescaleDB/PostgreSQL, Timebase (Flow Software), and FINOS TimeBase CE — all through a store-and-forward outbox with disk spill and configurable drop policy.
+- Recorder and replay, schema contracts with drift detection, alert rules with webhooks.
 
----
+**Tags**
+- Unified tag browser (OPC UA, Sparkplug registry, MQTT trie) with CSV import.
+- Bindings publish device tags into the UNS as plain values, TVQ envelopes, or a Sparkplug B device, with deadband and quality mapping. Read-only toward devices.
 
-## Architecture
+**Operations**
+- Token auth with admin and read-only roles, audit log, Prometheus `/metrics`, config export/import with secrets stripped.
 
-```
-Topic Canvas
-├── server/   Node.js + Express + Socket.IO backend
-│             MQTT (mqtt.js) · OPC UA (node-opcua) · CESMII SMIP · i3X · discovery · Sparkplug B
-├── client/   React + Vite + Tailwind frontend
-│             canvas force-graph, style presets, live data panels
-└── mcp/      Model Context Protocol server (stdio) bridging to the backend REST API
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works: system design, the message hot path, the API surface, protocol notes, and testing. Operational guides (broker ACLs, historian setup, transform reference, troubleshooting) live in the [wiki](../../wiki), generated from [`docs/wiki/`](docs/wiki).
 
-The backend holds all live state and streams updates over Socket.IO. The client is
-a thin, real-time view. The MCP server is a stateless bridge over the backend's REST
-API, so a human in the browser and an AI agent over MCP see the exact same data.
+## Quick start
 
-### Graph visual styles
-
-The style presets live in `client/src/graph/graphStyles.js`. Each is a
-self-contained theme (background, palette, link + node treatment, glow, labels,
-optional grid) that the canvas renderer reads every frame, so switching styles
-restyles the whole graph instantly without recomputing layout. The looks are
-inspired by a range of well-loved graph visualizations but stand on their own and
-are named for the aesthetic they produce.
-
----
-
-## Getting started
-
-### Prerequisites
-
-- Node.js ≥ 20 (the OPC UA dependency chain uses ESM-only packages that require
-  Node 20.19+ / 22+)
-
-### Install
+Requires Node.js ≥ 20.19 (or 22+).
 
 ```bash
 npm run install:all
+npm run dev            # client on :3000, backend on :5000
 ```
 
-### Run (development)
+Production build:
 
 ```bash
-npm run dev
+npm run build
+npm start              # serves API + built client on :5000
 ```
 
-- Client: http://localhost:3000
-- Backend: http://localhost:5000 (the client dev server proxies `/api` and
-  `/socket.io` to it)
+A full demo stack (broker, OPC UA simulator, traffic generator) is one command away with Docker — see [DOCKER.md](DOCKER.md).
 
-### Build (production)
+## Authentication
+
+Manifold is a control plane: it can publish to brokers, send Sparkplug commands, and start network scans. Before exposing it beyond localhost, set a token:
 
 ```bash
-npm run build      # builds the client into client/dist
-npm start          # serves the API and the built client from the backend
+MANIFOLD_AUTH_TOKEN=$(openssl rand -hex 24) npm start
 ```
 
-### Authentication & persistence
+With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role. Without tokens the server runs open and warns at startup.
 
-Topic Canvas is a **control plane** — it can publish to brokers (including
-Sparkplug commands that actuate equipment), disconnect connections, and start
-network scans. Before exposing it beyond localhost:
-
-```bash
-TC_AUTH_TOKEN=$(openssl rand -hex 24) npm start
-```
-
-- With `TC_AUTH_TOKEN` set, every `/api` route and the Socket.IO handshake
-  require `Authorization: Bearer <token>`; the web UI shows an unlock screen and
-  remembers the token locally. `/health` stays open for liveness probes.
-  Without it, the server runs open and warns loudly at startup.
-- **Connection profiles persist**: brokers (with their admin API configs),
-  OPC UA endpoints, and CESMII / i3X configs are saved to
-  `server/data/profiles.json` (override with `TC_DATA_DIR`; disable restore with
-  `TC_NO_RESTORE=1`) and automatically reconnected on startup. The file can
-  contain credentials — that is the point of persistence — so it is written
-  `0600` (owner-only). Protect the host and directory accordingly; encrypting it
-  without a real key-management story would be theater, so we don't pretend to.
-- The MCP server forwards the same token: set `TC_AUTH_TOKEN` in its
-  environment when the backend runs authenticated.
-
----
+Connection profiles persist in `server/data/profiles.json` (mode 0600; directory configurable via `MANIFOLD_DATA_DIR`, restore disabled via `MANIFOLD_NO_RESTORE=1`). The file may contain broker credentials, so protect the host.
 
 ## MCP server
 
-The MCP server lets an AI client discover brokers, browse topics, read payloads,
-subscribe/publish, and walk an OPC UA address space — all through the running
-backend.
-
-1. Start the backend (`npm run dev` or `npm start`).
-2. Add the server to your MCP client config:
+Point any MCP client at `mcp/index.js` with the backend running:
 
 ```json
 {
   "mcpServers": {
-    "topic-canvas": {
+    "manifold": {
       "command": "node",
       "args": ["/absolute/path/to/mcp/index.js"],
-      "env": { "TOPIC_CANVAS_API_URL": "http://localhost:5000" }
+      "env": { "MANIFOLD_API_URL": "http://localhost:5000" }
     }
   }
 }
 ```
 
-### Tools exposed
+About 50 tools cover MQTT, UNS, Flows, DataOps, OPC UA, CESMII, and i3X. The full list is in [ARCHITECTURE.md](ARCHITECTURE.md#mcp-tools). Set `MANIFOLD_AUTH_TOKEN` in the MCP server's environment when the backend runs authenticated.
 
-| Tool | Purpose |
-| --- | --- |
-| `system_status` | Backend status: connections and discovery state |
-| `discover_scan` / `discover_results` | Scan a CIDR range for MQTT/OPC UA endpoints |
-| `mqtt_connect` / `mqtt_disconnect` / `mqtt_list_brokers` | Manage broker connections |
-| `mqtt_list_topics` / `mqtt_get_messages` | Read the topic tree and recent payloads |
-| `mqtt_subscribe` / `mqtt_publish` | Subscribe to filters and publish messages |
-| `mqtt_sparkplug_topology` / `mqtt_sys_stats` | Sparkplug device topology and broker `$SYS` health |
-| `mqtt_resolve_subscriptions` / `mqtt_topic_tree` | Resolve wildcard filters against observed topics; walk the topic tree |
-| `mqtt_admin_pubsub` | Per-client subscriptions from the broker admin API (optionally resolved) |
-| `opcua_connect` / `opcua_disconnect` / `opcua_list_connections` | Manage OPC UA connections |
-| `opcua_browse` / `opcua_read` / `opcua_monitor` | Walk the address space, read and monitor nodes |
-| `cesmii_configure` / `cesmii_status` | Configure and authenticate a CESMII SMIP instance |
-| `cesmii_list_equipment` / `cesmii_list_attributes` | List SMIP equipment and attributes |
-| `cesmii_history` / `cesmii_query` | Pull time-series history or run a raw GraphQL query |
-| `i3x_connect` / `i3x_probe` / `i3x_status` | Connect to, probe, or inspect an i3X server |
-| `i3x_namespaces` / `i3x_object_types` / `i3x_graph` | Discover namespaces, types, and the object graph |
-| `i3x_related` / `i3x_value` / `i3x_history` | Navigate relationships and read current/historical values |
+## Testing
 
----
+```bash
+cd server && npm test    # 124 tests, node:test, includes real-broker integration
+cd client && npm test    # Vitest over the pure logic modules
+```
 
-## HTTP API (selected)
-
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/api/system/status` | Overall status |
-| `POST` | `/api/system/discovery/start` | Start a network scan (`{ range?, mqttPorts?, opcuaPorts? }`) |
-| `GET` | `/api/mqtt/brokers` | List broker connections |
-| `POST` | `/api/mqtt/brokers` | Connect (`{ host, port?, protocol?, username?, password? }`) |
-| `GET` | `/api/mqtt/brokers/:id/topics` | Topic list with counts |
-| `GET` | `/api/mqtt/brokers/:id/sparkplug` | Sparkplug device topology (Group → Edge → Device) |
-| `GET` | `/api/mqtt/brokers/:id/sys` | Broker `$SYS` health summary |
-| `POST` | `/api/mqtt/brokers/:id/subscriptions/resolve` | Resolve wildcard filters against observed topics (`{ filters }`) |
-| `GET` | `/api/mqtt/brokers/:id/topictree?prefix=` | One level of the observed topic tree with subtree counts |
-| `GET` | `/api/mqtt/brokers/:id/admin/pubsub?resolve=1` | Per-client subscriptions from the broker admin API, wildcard-resolved |
-| `GET` | `/api/mqtt/brokers/:id/messages?topic=` | Recent messages for a topic |
-| `POST` | `/api/mqtt/brokers/:id/publish` | Publish (`{ topic, payload, qos?, retain? }`) |
-| `POST` | `/api/opcua/connections` | Connect (`{ endpointUrl, securityMode?, ... }`) |
-| `GET` | `/api/opcua/connections/:id/browse?nodeId=` | Browse a node's children |
-| `POST` | `/api/opcua/connections/:id/monitor` | Monitor a variable (`{ nodeId, samplingInterval? }`) |
-| `POST` | `/api/cesmii/config` | Configure + authenticate a SMIP instance |
-| `GET` | `/api/cesmii/equipment` · `/attributes` | List SMIP equipment / attributes |
-| `POST` | `/api/cesmii/history` | Time-series history (`{ ids, startTime, endTime, maxSamples? }`) |
-| `POST` | `/api/i3x/connect` · `/probe` | Connect to / probe an i3X server (`{ baseUrl, token? }`) |
-| `GET` | `/api/i3x/objects` · `/graph` · `/namespaces` | List objects, the object graph, and namespaces |
-| `POST` | `/api/i3x/value` · `/history` | Read current / historical i3X object values |
-| `GET` | `/api/layout/engines` | List available layout engines |
-| `POST` | `/api/layout` | Compute a graph layout (`{ graph, engine, direction? }`) → node coordinates |
-
-Real-time updates (messages, broker stats, discovery progress, OPC UA values) are
-delivered over Socket.IO.
-
----
-
-## Tests & CI
-
-- **Server tests** run on Node's built-in test runner (no extra dependencies):
-
-  ```bash
-  cd server && npm test
-  ```
-
-  They cover CIDR expansion, MQTT message-type / Sparkplug detection, CESMII config
-  validation, and an HTTP smoke test that boots the app and exercises the REST
-  surface.
-
-- **GitHub Actions** (`.github/workflows/ci.yml`) runs on every push and PR to
-  `main`: server tests on Node 20/22, a client production build, and an MCP
-  server load check.
-
----
-
-## Tech stack
-
-- **Backend:** Express, Socket.IO, `mqtt`, `node-opcua-client`, `protobufjs`
-- **Frontend:** React 18, Vite, Tailwind CSS, `d3-force` / `d3-zoom` (canvas
-  rendering), Zustand, Framer Motion, lucide-react
-- **MCP:** `@modelcontextprotocol/sdk`
+CI additionally runs an integration job against real EMQX, InfluxDB, and TimescaleDB containers. Details in [ARCHITECTURE.md](ARCHITECTURE.md#testing).
 
 ## License
 

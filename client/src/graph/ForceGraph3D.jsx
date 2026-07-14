@@ -13,6 +13,12 @@ const FOCAL = 900;
 const CAM_DIST = 950;
 const MAX_3D_NODES = 12000; // 3D projection + depth sort per frame stays smooth to here
 
+/** Strip the alpha channel from an rgba() color (depth fading owns opacity here). */
+function opaqueColor(color) {
+  const m = /^rgba\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,[^)]+\)$/.exec(String(color).trim());
+  return m ? `rgb(${m[1]},${m[2]},${m[3]})` : color;
+}
+
 const ForceGraph3D = forwardRef(function ForceGraph3D(
   { data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false },
   ref
@@ -77,15 +83,25 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
 
     const hover = hoverRef.current;
 
-    // Links first (behind nodes), faded by average depth.
+    // Links first (behind nodes), faded by average endpoint depth. Styles
+    // carry translucent link colors tuned for the 2D renderer — compounding
+    // that with a second flat alpha here left 3D links at ~5% opacity
+    // (invisible), so strip the color's own alpha and let depth own the fade.
+    const linkColor = opaqueColor(style.link.color);
     ctx.lineWidth = 1;
     for (const l of links) {
       const a = proj.get(l.source);
       const b = proj.get(l.target);
       if (!a || !b) continue;
       const active = hover && (l.source === hover || l.target === hover);
-      ctx.globalAlpha = active ? 0.9 : 0.18;
-      ctx.strokeStyle = active ? style.linkHighlight : style.link.color;
+      if (active) {
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = style.linkHighlight;
+      } else {
+        const depth = Math.max(0, Math.min(1, 1.4 - ((a.zc + b.zc) / 2 - CAM_DIST + 400) / 1400));
+        ctx.globalAlpha = 0.15 + depth * 0.3; // 0.15 far → 0.45 near
+        ctx.strokeStyle = linkColor;
+      }
       ctx.beginPath();
       ctx.moveTo(a.sx, a.sy);
       ctx.lineTo(b.sx, b.sy);

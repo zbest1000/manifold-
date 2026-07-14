@@ -15,10 +15,18 @@ const SparkplugDecoder = require('./sparkplugDecoder');
  * Device — with live online/offline state and each endpoint's metric set. These
  * are real publishing endpoints, not just topic strings.
  */
+const MAX_EVENTS = 2000;
+
 class SparkplugRegistry {
   constructor() {
     this.groups = new Map(); // groupId -> { id, edgeNodes: Map }
     this.lastUpdate = 0;
+    this.events = []; // bounded ring of BIRTH/DEATH lifecycle events
+  }
+
+  _event(evt) {
+    this.events.push(evt);
+    if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
   }
 
   _group(id) {
@@ -72,9 +80,23 @@ class SparkplugRegistry {
     if (type === 'NBIRTH' || type === 'DBIRTH') {
       target.online = true;
       target.lastBirth = ts;
+      this._event({
+        type: info.deviceId ? 'device-birth' : 'edge-birth',
+        group: info.groupId,
+        edgeNode: info.edgeNodeId,
+        device: info.deviceId || null,
+        ts
+      });
     } else if (type === 'NDEATH' || type === 'DDEATH') {
       target.online = false;
       target.lastDeath = ts;
+      this._event({
+        type: info.deviceId ? 'device-death' : 'edge-death',
+        group: info.groupId,
+        edgeNode: info.edgeNodeId,
+        device: info.deviceId || null,
+        ts
+      });
       // Sparkplug spec: an edge node's death implies ALL of its devices are
       // offline (their data path is gone). Cascade so the topology stays honest.
       if (type === 'NDEATH') {
@@ -82,6 +104,7 @@ class SparkplugRegistry {
           if (d.online) {
             d.online = false;
             d.lastDeath = ts;
+            this._event({ type: 'device-death', group: info.groupId, edgeNode: info.edgeNodeId, device: d.id, ts, cascaded: true });
           }
         }
       }

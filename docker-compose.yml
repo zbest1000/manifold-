@@ -1,4 +1,4 @@
-# Topic Canvas — full local test stack.
+# Manifold — full local test stack.
 #
 #   docker compose up --build
 #   → open http://localhost:5000
@@ -60,8 +60,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
-      TC_DATA_DIR: /data
-      # TC_AUTH_TOKEN: set-a-secret-to-require-auth
+      MANIFOLD_DATA_DIR: /data
+      # MANIFOLD_AUTH_TOKEN: set-a-secret-to-require-auth
     volumes:
       - app-data:/data # persists connection profiles across restarts
     ports:

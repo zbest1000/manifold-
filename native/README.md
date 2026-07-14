@@ -52,7 +52,7 @@ memory/latency-bound rather than throughput-bound.
 ```bash
 cd native
 cargo build --release
-cp target/release/libtopic_canvas_native.so index.node   # .dylib on macOS
+cp target/release/libmanifold_native.so index.node   # .dylib on macOS
 node bench.js
 ```
 

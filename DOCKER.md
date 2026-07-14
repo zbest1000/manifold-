@@ -1,4 +1,4 @@
-# Running Topic Canvas with Docker
+# Running Manifold with Docker
 
 A one-command stack to try every feature locally — no external brokers or
 servers required.
@@ -16,12 +16,12 @@ server dependencies). Subsequent starts are fast.
 
 | Service | Image | Purpose | Host port |
 |---|---|---|---|
-| `app` | built from `docker/app/Dockerfile` | Topic Canvas (server + built client) | `5000` |
+| `app` | built from `docker/app/Dockerfile` | Manifold (server + built client) | `5000` |
 | `mqtt` | `eclipse-mosquitto:2` | MQTT broker (anonymous) | `1883`, `9001` (ws) |
 | `opcua` | `mcr.microsoft.com/iotedge/opc-plc` | Simulated OPC UA server | `50000` |
 | `simulator` | built from `docker/simulator` | Publishes MQTT + Sparkplug B traffic | — |
 
-## It just works
+## Pre-seeded demo data
 
 The app is **pre-seeded** (via `docker/app/seed/profiles.json`) to auto-connect
 on startup to:
@@ -53,7 +53,7 @@ External tools on your host machine can use `localhost:1883` and
 ## Auth
 
 The stack runs **open** by default (fine for localhost). To require a token,
-set `TC_AUTH_TOKEN` on the `app` service in `docker-compose.yml`, then enter the
+set `MANIFOLD_AUTH_TOKEN` on the `app` service in `docker-compose.yml`, then enter the
 same token in the app's unlock screen.
 
 ## Common commands

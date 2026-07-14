@@ -1,5 +1,5 @@
 {
-  "name": "topic-canvas",
+  "name": "manifold",
   "version": "2.0.0",
   "description": "A node-graph explorer for MQTT and OPC UA networks, with an MCP server for AI agents",
   "scripts": {

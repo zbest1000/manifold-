@@ -6,15 +6,24 @@ on:
   pull_request:
     branches: [main]
 
+# A new push supersedes any still-running CI for the same ref — without this,
+# a hung integration job spins for the full 6-hour runner limit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   server:
     name: Server (tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
-        # node-opcua pulls in ESM-only deps that require Node's require(ESM)
-        # support (Node 20.19+/22+), so Node 18 is not supported.
-        node-version: [20.x, 22.x]
+        # Node 22 LTS only. Node 18 lacks the require(ESM) support node-opcua
+        # needs; Node 20 reached end-of-life in April 2026 and its test runner
+        # has an IPC bug ("Unable to deserialize cloned data") that fails whole
+        # files at random — an EOL runtime isn't worth flaky signal.
+        node-version: [22.x]
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
@@ -29,8 +38,9 @@ jobs:
         run: npm test
 
   client:
-    name: Client (build)
+    name: Client (tests + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,9 +49,81 @@ jobs:
       - name: Install client dependencies
         working-directory: client
         run: npm install --no-audit --no-fund
+      - name: Run client tests
+        working-directory: client
+        run: npm test
       - name: Build client
         working-directory: client
         run: npm run build
+
+  integration:
+    name: Server (real EMQX + InfluxDB)
+    runs-on: ubuntu-latest
+    # A hung service connection must fail the job in minutes, not spin for the
+    # runner's 6-hour default.
+    timeout-minutes: 15
+    services:
+      emqx:
+        image: emqx/emqx:5.8
+        ports:
+          - 1883:1883
+        env:
+          # Stock EMQX's default file ACL denies wildcard '#' subscriptions at
+          # QoS 1+ from non-localhost — and with deny_action=ignore the SUBACK
+          # still "succeeds", so the client can't even detect it. A real EMQX
+          # deployment backing a UNS platform grants this permission; mirror
+          # that here so CI exercises QoS-1 intake the way production runs.
+          EMQX_AUTHORIZATION__NO_MATCH: allow
+          EMQX_AUTHORIZATION__SOURCES: '[]'
+      influxdb:
+        image: influxdb:2.7
+        ports:
+          - 8086:8086
+        env:
+          DOCKER_INFLUXDB_INIT_MODE: setup
+          DOCKER_INFLUXDB_INIT_USERNAME: ci
+          DOCKER_INFLUXDB_INIT_PASSWORD: ci-password
+          DOCKER_INFLUXDB_INIT_ORG: manifold
+          DOCKER_INFLUXDB_INIT_BUCKET: ci
+          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: manifold-ci-token
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: manifold
+          POSTGRES_USER: manifold
+          POSTGRES_PASSWORD: ci-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install --no-audit --no-fund
+      - name: Wait for services
+        # Waiting silently through a dead service just moves the failure into
+        # the tests as a hang — fail HERE, by name, if anything never opens.
+        run: |
+          wait_port() {
+            for i in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$2") 2>/dev/null && return 0; sleep 2; done
+            echo "::error::service $1 never opened port $2"; return 1
+          }
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8086/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:8086/health || { echo "::error::influxdb never became healthy"; exit 1; }
+          wait_port emqx 1883
+          wait_port timescaledb 5432
+      - name: Run real-service integration tests
+        working-directory: server
+        env:
+          INTEGRATION: '1'
+        # Direct execution (no `node --test`) — the runner's child-process IPC
+        # intermittently corrupts on CI ("Unable to deserialize cloned data").
+        run: node test/services-int.test.js
+      - name: Dump service container state on failure
+        if: failure()
+        run: docker ps -a && for c in $(docker ps -aq); do echo "===== $c"; docker logs --tail 50 "$c" 2>&1 | tail -50; done
 
   mcp:
     name: MCP server (load check)

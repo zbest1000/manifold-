@@ -1,6 +1,6 @@
 'use strict';
 
-// Demo data generator for Topic Canvas. Publishes two kinds of traffic to the
+// Demo data generator for Manifold. Publishes two kinds of traffic to the
 // bundled broker so every view has something to show:
 //   1. A hierarchical tree of plain JSON telemetry topics (Topics graph, Flows)
 //   2. Valid Sparkplug B NBIRTH/DBIRTH/NDATA/DDATA (Sparkplug device topology)

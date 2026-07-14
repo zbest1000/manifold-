@@ -1,11 +1,11 @@
 {
-  "name": "topic-canvas-mcp",
+  "name": "manifold-mcp",
   "version": "2.0.0",
-  "description": "MCP server exposing Topic Canvas MQTT + OPC UA exploration tools",
+  "description": "MCP server exposing Manifold MQTT + OPC UA exploration tools",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "topic-canvas-mcp": "index.js"
+    "manifold-mcp": "index.js"
   },
   "scripts": {
     "start": "node index.js"

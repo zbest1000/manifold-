@@ -1,13 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
-import ForceGraph3D from '@/graph/ForceGraph3D';
-import WebGLGraph from '@/graph/WebGLGraph';
+
+// Heavy renderers load on demand: three.js (3D view) and the WebGL big-graph
+// renderer aren't part of the initial bundle — most sessions never open them.
+const ForceGraph3D = lazy(() => import('@/graph/ForceGraph3D'));
+const WebGLGraph = lazy(() => import('@/graph/WebGLGraph'));
+
+function RendererLoading() {
+  return (
+    <div className="flex h-full items-center justify-center text-xs text-slate-500">
+      <Loader2 size={14} className="mr-2 animate-spin" /> Loading renderer…
+    </div>
+  );
+}
 import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
@@ -15,6 +26,7 @@ import ReplayScrubber from '@/components/ReplayScrubber';
 import TopicTree from '@/components/TopicTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
+import { diffPayloads, formatDiffValue } from '@/lib/payloadDiff';
 import { Card, Button, Badge, EmptyState, Input } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
 import ViewTab from '@/components/ViewTab';
@@ -285,7 +297,9 @@ export default function TopicGraph() {
           </div>
         ) : view === '3d' ? (
           <div className="relative flex-1">
-            <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+            <Suspense fallback={<RendererLoading />}>
+              <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+            </Suspense>
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate · scroll to zoom · click a node for details
             </div>
@@ -307,7 +321,9 @@ export default function TopicGraph() {
             {showAll ? (
               // GPU renderer for the "show everything" view — one draw call per
               // frame plus a viewport-culled label overlay stays smooth at 60k+.
-              <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
+              <Suspense fallback={<RendererLoading />}>
+                <WebGLGraph data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} labelDensity={labelDensity} positions={forcePositions} />
+              </Suspense>
             ) : (
               <ForceGraph
                 ref={graphRef}
@@ -455,6 +471,7 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
   const [publishValue, setPublishValue] = useState('');
   const [qos, setQos] = useState(0);
   const [retain, setRetain] = useState(false);
+  const [diffSel, setDiffSel] = useState([]); // up to two message ids for payload diff
 
   useEffect(() => {
     if (!fullTopic) return;
@@ -604,28 +621,105 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
 
         {merged.length > 0 && (
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              History ({merged.length})
-            </p>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                History ({merged.length})
+              </p>
+              <span className="text-[10px] text-slate-600">
+                {diffSel.length === 0 ? 'pick two to diff' : diffSel.length === 1 ? 'pick one more' : ''}
+              </span>
+            </div>
+            <PayloadDiffCard messages={merged} sel={diffSel} onClear={() => setDiffSel([])} />
             <div className="space-y-1">
-              {merged.map((m) => (
-                <div key={m.id} className="rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-500">
-                      {new Date(m.timestamp).toLocaleTimeString()}
-                    </span>
-                    <span className="text-[11px] text-slate-600">QoS {m.qos}</span>
+              {merged.map((m) => {
+                const inDiff = diffSel.includes(m.id);
+                return (
+                  <div
+                    key={m.id}
+                    className={clsx(
+                      'rounded-lg border px-2.5 py-1.5',
+                      inDiff ? 'border-accent-500/40 bg-accent-500/10' : 'border-white/5 bg-white/[0.02]'
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-500">
+                        {new Date(m.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-slate-600">QoS {m.qos}</span>
+                        <button
+                          title={inDiff ? 'Remove from diff' : 'Select for diff'}
+                          onClick={() =>
+                            setDiffSel((prev) =>
+                              prev.includes(m.id) ? prev.filter((id) => id !== m.id) : [...prev.slice(-1), m.id]
+                            )
+                          }
+                          className={clsx('rounded p-0.5', inDiff ? 'text-accent-300' : 'text-slate-600 hover:text-slate-300')}
+                        >
+                          <GitCompareArrows size={12} />
+                        </button>
+                      </span>
+                    </div>
+                    <p className="mono mt-0.5 truncate text-xs text-slate-300">
+                      {typeof m.payload === 'object' ? JSON.stringify(m.payload) : String(m.payload)}
+                    </p>
                   </div>
-                  <p className="mono mt-0.5 truncate text-xs text-slate-300">
-                    {typeof m.payload === 'object' ? JSON.stringify(m.payload) : String(m.payload)}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
       </div>
     </aside>
+  );
+}
+
+// Structural diff of two selected history messages (older → newer). Shows what
+// actually changed between publishes — the fastest way to spot a misbehaving
+// field in a fat JSON payload.
+function PayloadDiffCard({ messages, sel, onClear }) {
+  if (sel.length !== 2) return null;
+  const pair = messages.filter((m) => sel.includes(m.id));
+  if (pair.length !== 2) return null;
+  const [older, newer] = pair.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const changes = diffPayloads(older.payload, newer.payload);
+  const KIND_CLASS = { added: 'text-emerald-300', removed: 'text-rose-300', changed: 'text-amber-300' };
+  return (
+    <Card className="mb-2 p-2.5">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          <GitCompareArrows size={12} className="text-accent-300" /> Payload diff
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-500">
+            {new Date(older.timestamp).toLocaleTimeString()} → {new Date(newer.timestamp).toLocaleTimeString()}
+          </span>
+          <button onClick={onClear} className="text-slate-500 hover:text-slate-300">
+            <X size={12} />
+          </button>
+        </span>
+      </div>
+      {changes.length === 0 ? (
+        <p className="text-[11px] text-slate-500">Payloads are identical.</p>
+      ) : (
+        <div className="max-h-48 space-y-0.5 overflow-y-auto font-mono text-[11px]">
+          {changes.slice(0, 100).map((c, i) => (
+            <div key={i} className="flex items-baseline gap-1.5">
+              <span className={`shrink-0 ${KIND_CLASS[c.kind]}`}>{c.kind === 'added' ? '+' : c.kind === 'removed' ? '−' : '±'}</span>
+              <span className="shrink-0 text-slate-400">{c.path}</span>
+              <span className="truncate text-slate-500">
+                {c.kind === 'added'
+                  ? formatDiffValue(c.to)
+                  : c.kind === 'removed'
+                    ? formatDiffValue(c.from)
+                    : `${formatDiffValue(c.from)} → ${formatDiffValue(c.to)}`}
+              </span>
+            </div>
+          ))}
+          {changes.length > 100 && <p className="text-slate-500">…{changes.length - 100} more changes</p>}
+        </div>
+      )}
+    </Card>
   );
 }
 

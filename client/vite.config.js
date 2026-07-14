@@ -14,5 +14,9 @@ export default defineConfig({
       '/socket.io': { target: 'http://localhost:5000', ws: true, changeOrigin: true }
     }
   },
-  build: { outDir: 'dist', sourcemap: false }
+  build: { outDir: 'dist', sourcemap: false },
+  test: {
+    environment: 'node',
+    setupFiles: './src/test/setup.js'
+  }
 });

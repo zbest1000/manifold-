@@ -2,13 +2,22 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 
 // Boot the real app on an ephemeral port and exercise the HTTP surface.
+// Isolation matters: without MANIFOLD_NO_RESTORE the app would reconnect whatever
+// brokers a previous run persisted into the real data dir — live MQTT sockets
+// whose reconnect timers keep this test process alive forever (and make
+// "starts empty" assertions lie). Same for MANIFOLD_DATA_DIR: point persistence at a
+// throwaway dir so the test never reads or pollutes real state.
 process.env.PORT = '0';
+process.env.MANIFOLD_NO_RESTORE = '1';
+process.env.MANIFOLD_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'manifold-http-test-'));
 let baseUrl;
 let server;
+let services;
 
 before(async () => {
   const app = require('../index');
   server = app.server;
+  services = app.app.locals.services;
   await new Promise((resolve) => {
     if (server.listening) return resolve();
     server.once('listening', resolve);
@@ -18,6 +27,15 @@ before(async () => {
 });
 
 after(() => {
+  // Stop everything that could hold the event loop open.
+  services?.mqttManager?.shutdown();
+  services?.history?.stop();
+  services?.alerts?.stop();
+  services?.pipelines?.stop();
+  services?.recorder?.stop();
+  services?.replayer?.stop();
+  services?.contracts?.stop();
+  services?.models?.stop();
   server?.close();
 });
 

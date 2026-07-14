@@ -93,9 +93,9 @@ export function Input({ className, ...rest }) {
   );
 }
 
-export function Field({ label, children }) {
+export function Field({ label, children, className }) {
   return (
-    <label className="block space-y-1.5">
+    <label className={clsx('block space-y-1.5', className)}>
       <span className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</span>
       {children}
     </label>

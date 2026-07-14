@@ -29,7 +29,7 @@ const RULES = [
 
 const HTTP = {
   400: ['Bad request.', 'The request was malformed.'],
-  401: ['Unauthorized.', 'Set the access token (TC_AUTH_TOKEN) and unlock.'],
+  401: ['Unauthorized.', 'Set the access token (MANIFOLD_AUTH_TOKEN) and unlock.'],
   403: ['Forbidden.', 'You do not have permission for this action.'],
   404: ['Not found.', 'That resource or endpoint does not exist.'],
   408: ['Request timed out.', 'The server took too long to respond.'],
