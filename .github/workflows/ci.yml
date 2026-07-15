@@ -67,6 +67,7 @@ jobs:
         image: emqx/emqx:5.8
         ports:
           - 1883:1883
+          - 8083:8083 # MQTT over WebSocket (EMQX default listener, path /mqtt)
         env:
           # Stock EMQX's default file ACL denies wildcard '#' subscriptions at
           # QoS 1+ from non-localhost — and with deny_action=ignore the SUBACK
@@ -123,6 +124,7 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8086/health && break; sleep 2; done
           curl -fsS http://127.0.0.1:8086/health || { echo "::error::influxdb never became healthy"; exit 1; }
           wait_port emqx 1883
+          wait_port emqx-ws 8083
           wait_port timescaledb 5432
           # Timebase readiness = its REST API answers, not just the socket:
           # GET /api/datasets is the cheapest documented endpoint.

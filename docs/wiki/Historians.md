@@ -78,9 +78,9 @@ Writes are TVQ samples. Timebase also ingests MQTT/Sparkplug natively, so
 pointing its own collector at a pipeline's output namespace is an equally
 valid integration.
 
-> ℹ️ Timebase is **write-only** from Manifold's side: use Timebase's own
-> explorer to chart what landed there. The Trends page below reads from
-> InfluxDB and TimescaleDB.
+> ℹ️ Timebase has no tag-listing API, so the Trends tag *search* is off for
+> it — type the exact tag path instead. Querying works for all three
+> backends.
 
 ## Where the data comes from
 

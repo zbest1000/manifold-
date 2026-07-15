@@ -43,7 +43,8 @@ export default function Trends() {
       .listHistorians()
       .then((r) => {
         setHistorians(r.historians);
-        // Default to the first readable historian (timebase has no read API).
+        // Prefer a historian with tag search (timebase queries fine but has
+        // no tag-listing API, so it's a worse default).
         const first = r.historians.find((h) => h.type !== 'timebase') || r.historians[0];
         if (first) setHistId((prev) => prev || first.id);
       })
@@ -51,11 +52,11 @@ export default function Trends() {
   }, []);
 
   const selected = useMemo(() => historians.find((h) => h.id === histId) || null, [historians, histId]);
-  const readable = selected && selected.type !== 'timebase';
+  const searchable = selected && selected.type !== 'timebase'; // timebase: no tag-listing API
 
   // Debounced tag search against the historian itself.
   useEffect(() => {
-    if (!histId || !readable) {
+    if (!histId || !searchable) {
       setSuggestions([]);
       return;
     }
@@ -71,7 +72,7 @@ export default function Trends() {
         });
     }, 300);
     return () => clearTimeout(t);
-  }, [histId, query, readable]);
+  }, [histId, query, searchable]);
 
   const addTag = (raw) => {
     const tag = String(raw || '').trim();
@@ -177,7 +178,7 @@ export default function Trends() {
                     <div className="flex gap-2">
                       <Input
                         value={query}
-                        placeholder={readable ? 'Search stored topics… or type a path and press Enter' : 'Type the tag path and press Enter'}
+                        placeholder={searchable ? 'Search stored topics… or type a path and press Enter' : 'Type the tag path and press Enter'}
                         disabled={tags.length >= MAX_TAGS}
                         onChange={(e) => {
                           setQuery(e.target.value);
@@ -197,7 +198,7 @@ export default function Trends() {
                         <Plus size={14} /> Add
                       </Button>
                     </div>
-                    {suggestOpen && readable && shownSuggestions.length > 0 && (
+                    {suggestOpen && searchable && shownSuggestions.length > 0 && (
                       <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-white/10 bg-surface-900/95 py-1 shadow-2xl backdrop-blur">
                         {shownSuggestions.map((s) => (
                           <button
@@ -260,8 +261,8 @@ export default function Trends() {
 
               {selected?.type === 'timebase' && (
                 <p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-                  Timebase read-back isn't supported here — its public API is write-oriented, so tag search and querying
-                  will fail. Trend this data in Timebase Explorer, or pick an InfluxDB / TimescaleDB historian.
+                  Timebase has no tag-listing API, so search is off — type the exact tag path and press Enter. Querying
+                  works normally.
                 </p>
               )}
             </Card>

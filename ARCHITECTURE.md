@@ -229,9 +229,10 @@ flowchart LR
     API --> F{backend}
     F -->|influxdb| FLUX[Flux aggregateWindow mean]
     F -->|timescaledb| TB[time_bucket avg]
-    F -->|timebase| ERR[not supported - use the Timebase explorer]
+    F -->|timebase| TVQ[GET dataset data, bucket-averaged locally]
     FLUX --> S[series of tag, points]
     TB --> S
+    TVQ --> S
     S --> CH[SVG chart, 30s auto-refresh]
 ```
 
@@ -241,8 +242,9 @@ flowchart LR
 - Flux has no parameter binding over the raw `/query` endpoint, so tag names
   are strictly validated and quoted rather than interpolated cleverly;
   TimescaleDB queries are parameterized.
-- Timebase is write-only from Manifold's side — its own explorer is the read
-  tool there, and the query endpoint says so instead of guessing.
+- Timebase read-back uses the same documented dataset GET the CI integration
+  test exercises; the API returns raw TVQs, so downsampling happens locally.
+  Tag listing has no Timebase endpoint — Trends falls back to manual entry.
 
 ## Alerting
 

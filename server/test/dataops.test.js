@@ -292,10 +292,9 @@ test('timescale querySeries downsamples with time_bucket and only binds user inp
   assert.deepStrictEqual(out.series.find((s) => s.tag === 'plant/press').points, [[1700000000000, 3.25]]);
 });
 
-test('timebase read-back rejects with clear messages; range/tag validation applies to all backends', async () => {
+test('timebase tag listing rejects; range/tag validation applies to all backends', async () => {
   const conn = { type: 'timebase', url: 'http://h:4511', dataset: 'D' };
   await assert.rejects(() => historians.queryTags(conn, {}), /tag listing not supported for timebase — enter the tag path directly/);
-  await assert.rejects(() => historians.querySeries(conn, { tags: ['a'], start: 1000, end: 2000 }), /not supported for timebase/);
 
   const influx = { type: 'influxdb', url: 'http://i:8086', org: 'o', bucket: 'b' };
   await assert.rejects(() => historians.querySeries(influx, { tags: [], start: 1000, end: 2000 }), /1-10 non-empty strings/);
@@ -306,6 +305,46 @@ test('timebase read-back rejects with clear messages; range/tag validation appli
   await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 2000, end: 1000 }), /end must be after start/);
   await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 'nope', end: 2000 }), /ISO timestamps or epoch milliseconds/);
   await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 1000, end: 2000, maxPoints: 5 }), /between 10 and 5000/);
+});
+
+test('timebase querySeries hits the documented GET, keeps literal / in tagnames, and re-filters the window', async () => {
+  const conn = { type: 'timebase', url: 'http://h:4511/', dataset: 'The Plant', apiKey: 'k' };
+  const start = 1700000000000;
+  const end = start + 60_000;
+  let captured = null;
+  const fetchImpl = async (url, opts) => {
+    captured = { url, opts };
+    return {
+      ok: true,
+      json: async () => ({
+        tl: [
+          {
+            t: { n: 'plant/temp' },
+            d: [
+              { t: new Date(start + 1000).toISOString(), v: 20, q: 192 },
+              { t: new Date(start + 2000).toISOString(), v: 22, q: 192 },
+              // Outside the asked window — must be dropped even though the
+              // server returned it.
+              { t: new Date(end + 5000).toISOString(), v: 99, q: 192 }
+            ]
+          }
+        ]
+      })
+    };
+  };
+
+  const out = await historians.querySeries(conn, { tags: ['plant/temp', 'plant/none'], start, end, maxPoints: 10 }, fetchImpl);
+  assert.strictEqual(
+    captured.url,
+    `http://h:4511/api/datasets/The%20Plant/data?tagname=plant/temp&tagname=plant/none` +
+      `&start=${encodeURIComponent(new Date(start).toISOString())}&end=${encodeURIComponent(new Date(end).toISOString())}`
+  );
+  assert.strictEqual(captured.opts.headers.Authorization, 'Bearer k');
+  const temp = out.series.find((s) => s.tag === 'plant/temp');
+  // 60s window / 10 maxPoints = 6s buckets: both in-window TVQs land in
+  // bucket 0 and average to 21; the out-of-window 99 is gone.
+  assert.deepStrictEqual(temp.points, [[start, 21]]);
+  assert.deepStrictEqual(out.series.find((s) => s.tag === 'plant/none').points, []);
 });
 
 // ---- transforms ------------------------------------------------------------------

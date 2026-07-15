@@ -396,11 +396,61 @@ async function timescaleQuerySeries(conn, { tags, start, end, maxPoints }) {
 }
 
 const TIMEBASE_TAGS_ERROR = 'tag listing not supported for timebase — enter the tag path directly';
-const TIMEBASE_QUERY_ERROR = 'trend read-back not supported for timebase — use the Timebase Explorer to view this data';
+
+/**
+ * Timebase read-back: same documented GET the CI integration test uses —
+ *   GET {url}/api/datasets/{dataset}/data?tagname=...&start=ISO&end=ISO
+ * (tagname repeats per tag; tag paths keep literal '/' — the API matches raw
+ * paths). Response: { tl: [{ t: { n }, d: [{ t, v, q }] }] }. The API returns
+ * raw TVQs with no documented server-side downsampling, so points are
+ * bucket-averaged down to maxPoints here.
+ */
+async function timebaseQuerySeries(conn, { tags, start, end, maxPoints }, fetchImpl) {
+  const base = String(conn.url || '').replace(/\/+$/, '');
+  if (!base) throw new Error('timebase url is required');
+  if (!conn.dataset) throw new Error('timebase dataset is required');
+  const tagParams = tags.map((t) => `tagname=${encodeURIComponent(t).replace(/%2F/gi, '/')}`).join('&');
+  const url =
+    `${base}/api/datasets/${encodeURIComponent(conn.dataset)}/data?${tagParams}` +
+    `&start=${encodeURIComponent(new Date(start).toISOString())}&end=${encodeURIComponent(new Date(end).toISOString())}`;
+  const res = await fetchImpl(url, {
+    headers: { ...(conn.apiKey ? { Authorization: `Bearer ${conn.apiKey}` } : {}) }
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`timebase query failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
+  }
+  const data = await res.json().catch(() => null);
+  const list = Array.isArray(data?.tl) ? data.tl : [];
+  const bucketMs = Math.max(1, Math.ceil((end - start) / maxPoints));
+  const series = tags.map((tag) => {
+    const raw = list.find((s) => s?.t?.n === tag)?.d;
+    const buckets = new Map();
+    for (const p of Array.isArray(raw) ? raw : []) {
+      const ts = Date.parse(p?.t);
+      const value = Number(p?.v);
+      // The window is re-applied locally so a server that ignored start/end
+      // (or returned edge points) can't leak data outside the asked range.
+      if (!Number.isFinite(ts) || !Number.isFinite(value) || ts < start || ts > end) continue;
+      const b = Math.floor((ts - start) / bucketMs);
+      const agg = buckets.get(b) || { sum: 0, n: 0 };
+      agg.sum += value;
+      agg.n++;
+      buckets.set(b, agg);
+    }
+    const points = [...buckets.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([b, { sum, n }]) => [start + b * bucketMs, sum / n]);
+    return { tag, points };
+  });
+  return { series };
+}
 
 const TAG_QUERY_BACKENDS = {
   influxdb: influxQueryTags,
   timescaledb: timescaleQueryTags,
+  // No documented tag-enumeration endpoint — Trends falls back to manual
+  // tag-path entry for timebase.
   timebase: () => {
     throw new Error(TIMEBASE_TAGS_ERROR);
   }
@@ -409,9 +459,7 @@ const TAG_QUERY_BACKENDS = {
 const SERIES_QUERY_BACKENDS = {
   influxdb: influxQuerySeries,
   timescaledb: timescaleQuerySeries,
-  timebase: () => {
-    throw new Error(TIMEBASE_QUERY_ERROR);
-  }
+  timebase: timebaseQuerySeries
 };
 
 /** List distinct topic/tag names stored in a historian. */

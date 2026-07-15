@@ -23,6 +23,7 @@ const ENABLED = process.env.INTEGRATION === '1';
 const OPTS = (extra = {}) => ({ skip: !ENABLED, timeout: 90_000, ...extra });
 const EMQX_HOST = process.env.INTEGRATION_EMQX_HOST || '127.0.0.1';
 const EMQX_PORT = Number(process.env.INTEGRATION_EMQX_PORT || 1883);
+const EMQX_WS_PORT = Number(process.env.INTEGRATION_EMQX_WS_PORT || 8083);
 const INFLUX_URL = process.env.INTEGRATION_INFLUX_URL || 'http://127.0.0.1:8086';
 const INFLUX_TOKEN = process.env.INTEGRATION_INFLUX_TOKEN || 'manifold-ci-token';
 const INFLUX_ORG = process.env.INTEGRATION_INFLUX_ORG || 'manifold';
@@ -66,6 +67,42 @@ test('EMQX: manager connects, auto-subscribes, and ingests real retained traffic
   }
 });
 
+test('EMQX: MQTT 5 over WebSocket round-trips user properties', OPTS(), async () => {
+  // The unit tests only prove we hand mqtt.js the right URL/options; this
+  // proves a real broker accepts ws + protocolVersion 5 and echoes the
+  // per-message properties back through the intake into the store.
+  const manager = new MqttManager({ emit() {} });
+  try {
+    manager.connectToBroker({
+      id: 'emqx-ws5',
+      host: EMQX_HOST,
+      port: EMQX_WS_PORT,
+      protocol: 'ws',
+      wsPath: '/mqtt',
+      mqttVersion: 5,
+      name: 'ci-emqx-ws5'
+    });
+    assert.ok(
+      await until(() => manager.getConnection('emqx-ws5')?.status === 'connected'),
+      'must connect to EMQX over ws with MQTT 5'
+    );
+
+    await manager.publish('emqx-ws5', 'ci/ws5/props', { v: 1 }, {
+      retain: true,
+      properties: { userProperties: { run: 'ci', unit: 'line1' }, contentType: 'application/json' }
+    });
+
+    const surfaced = await until(() => {
+      const { topics } = manager.getTopics('emqx-ws5');
+      const t = topics.find((x) => x.topic === 'ci/ws5/props');
+      return t?.properties?.userProperties?.run === 'ci' && t?.properties?.contentType === 'application/json';
+    });
+    assert.ok(surfaced, 'MQTT 5 user properties must survive the broker round-trip into the topic store');
+  } finally {
+    manager.shutdown();
+  }
+});
+
 test('InfluxDB: line-protocol writes land and can be queried back via Flux', OPTS(), async () => {
   const conn = { type: 'influxdb', url: INFLUX_URL, org: INFLUX_ORG, bucket: INFLUX_BUCKET, token: INFLUX_TOKEN, measurement: 'ci_test' };
   const tag = `ci/run/${Date.now()}`;
@@ -85,6 +122,24 @@ test('InfluxDB: line-protocol writes land and can be queried back via Flux', OPT
     return csv.includes('42') && csv.includes('ci_test');
   });
   assert.ok(found, 'written points must be queryable from the real InfluxDB');
+
+  // The Trends read-back path (queryTags + querySeries) against the same
+  // instance — the unit tests only prove our Flux/CSV handling against
+  // fixtures; this proves it against real InfluxDB output.
+  const tagsListed = await until(async () => {
+    const tags = await historians.queryTags(conn, { search: tag, limit: 100 }).catch(() => []);
+    return tags.includes(tag);
+  });
+  assert.ok(tagsListed, 'queryTags must list the written topic');
+
+  const seriesBack = await until(async () => {
+    const out = await historians
+      .querySeries(conn, { tags: [tag], start: Date.now() - 300_000, end: Date.now() + 60_000, maxPoints: 500 })
+      .catch(() => null);
+    const values = out?.series?.[0]?.points.map((p) => p[1]) || [];
+    return values.includes(41) && values.includes(42);
+  });
+  assert.ok(seriesBack, 'querySeries must return the written values from real InfluxDB');
 });
 
 test('TimescaleDB: batch inserts land in a real hypertable and query back', OPTS(), async () => {
@@ -165,4 +220,26 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
     return values.includes(41) && values.includes(42);
   });
   assert.ok(found, 'written TVQs must be queryable back from the real Timebase');
+
+  // Our own querySeries against the same instance — proves the start/end
+  // query parameters are honored by the real API, not just relativeStart:
+  // an in-window query must return both values, and a window that ends
+  // BEFORE the writes must return nothing (if the server ignored unknown
+  // range params it would fall back to latest-point and this would leak).
+  const inWindow = await historians.querySeries(conn, {
+    tags: [tag],
+    start: base - 60_000,
+    end: base + 60_000,
+    maxPoints: 100
+  });
+  const values = inWindow.series[0].points.map((p) => p[1]);
+  assert.ok(values.includes(41) && values.includes(42), `querySeries must return both TVQs, got ${JSON.stringify(values)}`);
+
+  const beforeWrites = await historians.querySeries(conn, {
+    tags: [tag],
+    start: base - 120_000,
+    end: base - 60_000,
+    maxPoints: 100
+  });
+  assert.strictEqual(beforeWrites.series[0].points.length, 0, 'a window before the writes must be empty');
 });
