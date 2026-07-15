@@ -396,6 +396,18 @@ class MqttManager extends EventEmitter {
     });
   }
 
+  // Update a saved broker's config in place: validate first (a bad body must
+  // not tear down the existing connection), then disconnect the old client and
+  // start a fresh connect under the SAME id — subscriptions re-apply through
+  // autoSubscribe on connect, exactly like a newly added broker.
+  updateBroker(brokerId, config = {}) {
+    if (!config.host) {
+      throw new Error('host is required');
+    }
+    if (this.connections.has(brokerId)) this.disconnectFromBroker(brokerId);
+    return this.connectToBroker({ ...config, id: brokerId });
+  }
+
   disconnectFromBroker(brokerId) {
     const client = this.clients.get(brokerId);
     const info = this.connections.get(brokerId);

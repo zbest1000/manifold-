@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ChevronRight, ChevronDown, FolderClosed, CircleDot, Tags as TagsIcon, Trash2,
-  Plus, Upload, Radio, Cpu, X
+  Plus, Upload, Radio, Cpu, X, Pencil
 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
@@ -26,6 +26,7 @@ export default function Tags() {
   const [selection, setSelection] = useState(new Map()); // address -> { name, meta }
   const [bindings, setBindings] = useState({ bindings: [], status: {} });
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [editingBinding, setEditingBinding] = useState(null);
   const [csvOpen, setCsvOpen] = useState(false);
 
   const loadSources = useCallback(() => {
@@ -126,11 +127,14 @@ export default function Tags() {
               {bindings.bindings.map((b) => {
                 const s = bindings.status[b.id] || {};
                 return (
-                  <div key={b.id} className="rounded-lg bg-black/20 px-2.5 py-2">
+                  <div key={b.id} className={clsx('rounded-lg bg-black/20 px-2.5 py-2', editingBinding?.id === b.id && 'ring-1 ring-accent-500/40')}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate text-xs font-semibold text-slate-200">{b.name || b.id.slice(0, 8)}</span>
                       <span className="flex items-center gap-1.5">
                         <Badge>{b.source.type}→{b.target.mode}</Badge>
+                        <button aria-label="Edit binding" onClick={() => setEditingBinding(b)} className="rounded p-0.5 text-slate-500 hover:text-accent-400">
+                          <Pencil size={12} />
+                        </button>
                         <button onClick={() => api.deleteBinding(b.id).then(loadBindings)} className="rounded p-0.5 text-slate-500 hover:text-rose-300">
                           <Trash2 size={12} />
                         </button>
@@ -164,6 +168,19 @@ export default function Tags() {
           onDone={() => {
             setWizardOpen(false);
             setSelection(new Map());
+            loadBindings();
+          }}
+        />
+      )}
+      {editingBinding && (
+        <BindWizard
+          editing={editingBinding}
+          source={source}
+          selection={selection}
+          brokers={brokers}
+          onClose={() => setEditingBinding(null)}
+          onDone={() => {
+            setEditingBinding(null);
             loadBindings();
           }}
         />
@@ -252,25 +269,56 @@ function TreeNode({ source, node, depth, selection, onToggle }) {
 
 // ---- bind wizard ------------------------------------------------------------------
 
-function BindWizard({ source, selection, brokers, onClose, onDone }) {
-  const [name, setName] = useState('');
-  const [mode, setMode] = useState('mqtt'); // 'mqtt' | 'sparkplug'
+function BindWizard({ source, selection, brokers, editing = null, onClose, onDone }) {
+  // Edit mode reuses the wizard: the saved binding seeds every field, the
+  // source stays as stored (browse context isn't needed), and save upserts by id.
+  const srcType = editing ? editing.source.type : source.type;
+  const [name, setName] = useState(editing?.name || '');
+  const [mode, setMode] = useState(editing?.target.mode || 'mqtt'); // 'mqtt' | 'sparkplug'
   const [form, setForm] = useState({
-    brokerId: brokers[0]?.id || '',
-    pathTemplate: 'uns/imported/{name}',
-    format: 'envelope',
-    retain: true,
-    qos: 0,
-    deadband: '',
-    samplingInterval: 1000,
-    group: 'Manifold',
-    edge: 'edge1',
-    device: 'imported'
+    brokerId: editing?.target.brokerId || brokers[0]?.id || '',
+    pathTemplate: editing?.target.pathTemplate || 'uns/imported/{name}',
+    format: editing?.target.format || 'envelope',
+    retain: editing ? editing.target.retain !== false : true,
+    qos: editing?.target.qos ?? 0,
+    deadband: editing?.target.deadband ?? '',
+    samplingInterval: editing?.source.samplingInterval ?? 1000,
+    group: editing?.target.group || 'Manifold',
+    edge: editing?.target.edge || 'edge1',
+    device: editing?.target.device || 'imported'
   });
   const tags = useMemo(() => [...selection.entries()].map(([address, t]) => ({ address, name: t.name })), [selection]);
 
+  const buildTarget = () =>
+    mode === 'mqtt'
+      ? {
+          mode: 'mqtt',
+          brokerId: form.brokerId,
+          pathTemplate: form.pathTemplate,
+          format: form.format,
+          retain: form.retain,
+          qos: Number(form.qos) || 0,
+          ...(Number(form.deadband) > 0 ? { deadband: Number(form.deadband) } : {})
+        }
+      : { mode: 'sparkplug', brokerId: form.brokerId, group: form.group, edge: form.edge, device: form.device };
+
   const create = async () => {
     try {
+      if (editing) {
+        await api.saveBinding({
+          id: editing.id,
+          name: name || null,
+          enabled: editing.enabled !== false,
+          source:
+            srcType === 'opcua'
+              ? { ...editing.source, samplingInterval: Number(form.samplingInterval) || 1000 }
+              : editing.source,
+          target: buildTarget()
+        });
+        toast.success('Binding saved');
+        onDone();
+        return;
+      }
       if (source.type === 'mqtt') {
         // MQTT-source tags compile straight into a pipeline route: subscribe
         // to the selection's common prefix, re-path the tail under the UNS base.
@@ -293,18 +341,7 @@ function BindWizard({ source, selection, brokers, onClose, onDone }) {
             source.type === 'opcua'
               ? { type: 'opcua', connectionId: source.id, tags, samplingInterval: Number(form.samplingInterval) || 1000 }
               : sparkplugSourceFromSelection(source.id, selection),
-          target:
-            mode === 'mqtt'
-              ? {
-                  mode: 'mqtt',
-                  brokerId: form.brokerId,
-                  pathTemplate: form.pathTemplate,
-                  format: form.format,
-                  retain: form.retain,
-                  qos: Number(form.qos) || 0,
-                  ...(Number(form.deadband) > 0 ? { deadband: Number(form.deadband) } : {})
-                }
-              : { mode: 'sparkplug', brokerId: form.brokerId, group: form.group, edge: form.edge, device: form.device }
+          target: buildTarget()
         };
         await api.saveBinding(body);
       }
@@ -320,7 +357,9 @@ function BindWizard({ source, selection, brokers, onClose, onDone }) {
       <Card className="w-full max-w-xl p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-100">
-            Add {source.type === 'sparkplug' ? 'Sparkplug metrics' : `${selection.size} tag(s)`} to the UNS
+            {editing
+              ? `Edit binding ${editing.name || editing.id.slice(0, 8)}`
+              : `Add ${srcType === 'sparkplug' ? 'Sparkplug metrics' : `${selection.size} tag(s)`} to the UNS`}
           </h3>
           <button onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-white/10">
             <X size={14} />
@@ -333,7 +372,7 @@ function BindWizard({ source, selection, brokers, onClose, onDone }) {
           <Field label="Publish as">
             <select value={mode} onChange={(e) => setMode(e.target.value)} className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200">
               <option value="mqtt">Plain MQTT topics</option>
-              {source.type !== 'mqtt' && <option value="sparkplug">Sparkplug B device (NBIRTH/DDATA)</option>}
+              {srcType !== 'mqtt' && <option value="sparkplug">Sparkplug B device (NBIRTH/DDATA)</option>}
             </select>
           </Field>
           <Field label="Target broker">
@@ -354,12 +393,12 @@ function BindWizard({ source, selection, brokers, onClose, onDone }) {
                   <option value="plain">Raw value</option>
                 </select>
               </Field>
-              {source.type === 'opcua' && (
+              {srcType === 'opcua' && (
                 <Field label="Deadband (abs, optional)">
                   <Input value={form.deadband} onChange={(e) => setForm({ ...form, deadband: e.target.value })} placeholder="0.5" />
                 </Field>
               )}
-              {source.type === 'opcua' && (
+              {srcType === 'opcua' && (
                 <Field label="Sampling (ms)">
                   <Input type="number" value={form.samplingInterval} onChange={(e) => setForm({ ...form, samplingInterval: e.target.value })} />
                 </Field>
@@ -382,7 +421,7 @@ function BindWizard({ source, selection, brokers, onClose, onDone }) {
         </p>
         <div className="mt-3 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={create} disabled={!form.brokerId}>Create binding</Button>
+          <Button onClick={create} disabled={!form.brokerId}>{editing ? 'Save changes' : 'Create binding'}</Button>
         </div>
       </Card>
     </div>

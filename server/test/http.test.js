@@ -53,6 +53,15 @@ async function post(path, body) {
   return { status: res.status, body: await res.json() };
 }
 
+async function put(path, body) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 test('GET /health reports healthy', async () => {
   const { status, body } = await get('/health');
   assert.strictEqual(status, 200);
@@ -104,6 +113,50 @@ test('POST /api/cesmii/config validates required fields', async () => {
 test('unknown OPC UA connection returns 404 on delete', async () => {
   const res = await fetch(`${baseUrl}/api/opcua/connections/does-not-exist`, { method: 'DELETE' });
   assert.strictEqual(res.status, 404);
+});
+
+test('PUT /api/mqtt/brokers/:id returns 404 for unknown ids', async () => {
+  const { status, body } = await put('/api/mqtt/brokers/does-not-exist', { host: 'localhost' });
+  assert.strictEqual(status, 404);
+  assert.match(body.error, /not found/i);
+});
+
+test('PUT /api/opcua/connections/:id returns 404 for unknown ids', async () => {
+  const { status, body } = await put('/api/opcua/connections/does-not-exist', { endpointUrl: 'opc.tcp://x:4840' });
+  assert.strictEqual(status, 404);
+  assert.match(body.error, /not found/i);
+});
+
+test('PUT /api/mqtt/brokers/:id validates like POST and updates the profile in place', async () => {
+  // A closed local port is enough: the manager registers the connection
+  // without ever reaching a real broker (reconnect off keeps it quiet).
+  const created = await post('/api/mqtt/brokers', { name: 'edit-me', host: '127.0.0.1', port: 59999, reconnect: false });
+  assert.strictEqual(created.status, 202);
+  const id = created.body.brokerId;
+
+  // Same validation as POST — and the bad body must not drop the broker.
+  const bad = await put(`/api/mqtt/brokers/${id}`, {});
+  assert.strictEqual(bad.status, 400);
+  assert.match(bad.body.error, /host is required/);
+  assert.ok((await get(`/api/mqtt/brokers/${id}`)).status === 200, 'broker must survive a rejected update');
+
+  const updated = await put(`/api/mqtt/brokers/${id}`, { name: 'edited', host: '127.0.0.1', port: 59998, reconnect: false });
+  assert.strictEqual(updated.status, 202);
+  assert.strictEqual(updated.body.brokerId, id);
+
+  // Profile store keeps the SAME id with the new config…
+  const saved = services.profiles.brokers().find((b) => b.config?.id === id);
+  assert.ok(saved, 'profile entry must survive the update');
+  assert.strictEqual(saved.config.name, 'edited');
+  assert.strictEqual(saved.config.port, 59998);
+
+  // …and the live connection list reflects it too.
+  const list = await get('/api/mqtt/brokers');
+  const conn = list.body.brokers.find((b) => b.id === id);
+  assert.strictEqual(conn.name, 'edited');
+  assert.strictEqual(conn.port, 59998);
+
+  await fetch(`${baseUrl}/api/mqtt/brokers/${id}`, { method: 'DELETE' });
 });
 
 test('POST /subscriptions/resolve validates filters and 404s unknown brokers', async () => {

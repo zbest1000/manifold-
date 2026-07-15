@@ -101,6 +101,48 @@ server.tool(
   }
 );
 
+server.tool(
+  'discovery_stop',
+  'Stop an in-progress network discovery scan (changes server state).',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/system/discovery/stop', { method: 'POST' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'config_export',
+  'Export the full DataOps configuration (pipelines, historians, models, recordings, contracts, bindings, mounts, alert rules) as one JSON document. Secrets are stripped.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/system/config/export'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'config_import',
+  'Import a DataOps configuration export (changes server state): merges by id — existing ids are overwritten, nothing is deleted. Stored secrets are kept when the import carries none.',
+  {
+    config: z.object({ manifoldConfig: z.number() }).passthrough()
+      .describe('A config document from config_export (must carry manifoldConfig: 1).')
+  },
+  async ({ config }) => {
+    try {
+      return ok(await api('/api/system/config/import', { method: 'POST', body: JSON.stringify(config) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
 // ---------------------------------------------------------------------------
 // MQTT
 // ---------------------------------------------------------------------------
@@ -331,12 +373,165 @@ server.tool(
 );
 
 server.tool(
+  'pipeline_save',
+  'Create or update a DataOps pipeline route (changes server state). Pass id to update an existing route; omit it to create one. Target is { type: "mqtt", brokerId, topicPrefix?, ... } or { type: "historian", historianId, ... }. Use pipeline_preview first to dry-run.',
+  {
+    id: z.string().optional().describe('Route id to update; omit to create.'),
+    name: z.string().optional(),
+    enabled: z.boolean().optional().describe('Default true.'),
+    source: z.object({ brokerId: z.string(), filter: z.string() }).describe('Source broker and topic filter (wildcards + / # allowed).'),
+    transforms: z.array(z.object({ type: z.string() }).passthrough()).optional()
+      .describe('Transform steps: repath, pick, rename, set, scale, numeric, sparkplugFlatten, envelope.'),
+    target: z.object({ type: z.enum(['mqtt', 'historian']) }).passthrough()
+      .describe('Target: { type: "mqtt", brokerId, ... } or { type: "historian", historianId, ... }.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/pipelines', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'pipeline_delete',
+  'Delete a DataOps pipeline route (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/pipelines/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
   'historians_list',
   'Configured historian connections (InfluxDB v2, Timebase) that pipelines and the recorder can write time-series into. Secrets are redacted.',
   {},
   async () => {
     try {
       return ok(await api('/api/historians'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'historian_save',
+  'Create or update a historian connection (changes server state). influxdb needs url, org, bucket (token for auth); timebase needs url, dataset (apiKey for auth); timescaledb needs host, database, user (password for auth). Omitted secrets keep their stored value on edit.',
+  {
+    id: z.string().optional().describe('Historian id to update; omit to create.'),
+    name: z.string().optional(),
+    type: z.enum(['influxdb', 'timebase', 'timescaledb']),
+    url: z.string().optional().describe('Base URL (influxdb, timebase).'),
+    org: z.string().optional().describe('InfluxDB organization.'),
+    bucket: z.string().optional().describe('InfluxDB bucket.'),
+    token: z.string().optional().describe('InfluxDB API token.'),
+    measurement: z.string().optional().describe('InfluxDB measurement name.'),
+    dataset: z.string().optional().describe('Timebase dataset.'),
+    writePath: z.string().optional().describe('Timebase write path override.'),
+    apiKey: z.string().optional().describe('Timebase API key.'),
+    host: z.string().optional().describe('TimescaleDB host.'),
+    port: z.number().optional().describe('TimescaleDB port.'),
+    database: z.string().optional().describe('TimescaleDB database.'),
+    user: z.string().optional().describe('TimescaleDB user.'),
+    password: z.string().optional().describe('TimescaleDB password.'),
+    ssl: z.boolean().optional().describe('TimescaleDB SSL.'),
+    table: z.string().optional().describe('TimescaleDB table.'),
+    dropPolicy: z.enum(['newest', 'oldest']).optional().describe('Which points to drop when the store-and-forward outbox is full (default newest).')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/historians', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'historian_delete',
+  'Delete a historian connection (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/historians/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'historian_test',
+  'Test a historian connection by writing one test point (tag "manifold/connection-test"). Writes real data to the historian.',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/historians/${encodeURIComponent(id)}/test`, { method: 'POST' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contracts_list',
+  'List schema contracts (locked payload shapes per topic filter) with check/violation counters.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/contracts'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contract_infer',
+  'Infer a JSON schema from the latest observed payload on a topic — use the result as the schema for contract_lock. Read-only.',
+  { brokerId: z.string(), topic: z.string() },
+  async (args) => {
+    try {
+      return ok(await api('/api/contracts/infer', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contract_lock',
+  'Lock a schema contract on a topic filter (changes server state): payloads that drift from the schema are reported as violations. Derive the schema with contract_infer first.',
+  {
+    id: z.string().optional().describe('Contract id to update; omit to create.'),
+    name: z.string().optional(),
+    brokerId: z.string(),
+    filter: z.string().describe('Topic filter (wildcards + / # allowed).'),
+    schema: z.object({ type: z.string() }).passthrough().describe('Schema object (from contract_infer).'),
+    enabled: z.boolean().optional().describe('Default true.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/contracts', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'contract_delete',
+  'Delete a schema contract (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/contracts/${encodeURIComponent(id)}`, { method: 'DELETE' }));
     } catch (error) {
       return fail(error);
     }
@@ -370,12 +565,304 @@ server.tool(
 );
 
 server.tool(
+  'model_save',
+  'Create or update a contextualization model (changes server state): multi-source attributes merged into one object published at a UNS path.',
+  {
+    id: z.string().optional().describe('Model id to update; omit to create.'),
+    name: z.string().optional(),
+    enabled: z.boolean().optional().describe('Default true.'),
+    target: z.object({ brokerId: z.string(), topic: z.string(), retain: z.boolean().optional() })
+      .describe('Where the merged object is published.'),
+    publishMode: z.enum(['on-change', 'interval']).optional().describe('Default on-change.'),
+    intervalMs: z.number().optional().describe('Publish interval for interval mode (default 5000).'),
+    attributes: z.array(
+      z.object({
+        name: z.string(),
+        source: z.object({ brokerId: z.string(), topic: z.string() }).passthrough()
+      }).passthrough()
+    ).describe('Attributes: each has a name and a source { brokerId, topic }.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/models', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'model_delete',
+  'Delete a contextualization model (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'tags_sources',
+  'List browsable tag sources right now: connected OPC UA servers, Sparkplug registries, and MQTT topic tries.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/tags/sources'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'tags_browse',
+  'Browse one level of device tags under a node in a source (from tags_sources). Nodes are { id, name, kind: "folder"|"tag", address }.',
+  {
+    type: z.enum(['opcua', 'sparkplug', 'mqtt']).describe('Source type.'),
+    id: z.string().describe('Source id (connectionId or brokerId).'),
+    node: z.string().optional().describe('Node to browse under; omit for the root level.')
+  },
+  async ({ type, id, node }) => {
+    try {
+      const q = new URLSearchParams({ type, id, ...(node ? { node } : {}) });
+      return ok(await api(`/api/tags/browse?${q}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
   'bindings_list',
   'Tag bindings: device tags (OPC UA nodes, Sparkplug metrics) bound into the UNS, with per-binding publish/deadband/error status and Sparkplug edge-node session state.',
   {},
   async () => {
     try {
       return ok(await api('/api/tags/bindings'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'binding_save',
+  'Create or update a tag binding (changes server state): bind OPC UA nodes or Sparkplug metrics into the UNS. Opcua source needs { type: "opcua", connectionId, tags: [...] }; sparkplug source needs { type: "sparkplug", brokerId, group, edge }. Target: { mode: "mqtt"|"sparkplug", brokerId, ... } (sparkplug mode also needs group and edge).',
+  {
+    id: z.string().optional().describe('Binding id to update; omit to create.'),
+    name: z.string().optional(),
+    enabled: z.boolean().optional().describe('Default true.'),
+    source: z.object({ type: z.enum(['opcua', 'sparkplug']) }).passthrough()
+      .describe('Source: { type: "opcua", connectionId, tags } or { type: "sparkplug", brokerId, group, edge }.'),
+    target: z.object({ mode: z.enum(['mqtt', 'sparkplug']), brokerId: z.string() }).passthrough()
+      .describe('Target: { mode, brokerId, ... }; sparkplug mode also needs group and edge.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/tags/bindings', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'binding_delete',
+  'Delete a tag binding (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/tags/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'recorder_list',
+  'List recordings with live capture status, plus the active replay state.',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/recorder'));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'recorder_save',
+  'Create or update a recording (changes server state): captures messages matching a topic filter to a file or historian. Set enabled: false to stop capture without deleting data (there is no separate stop endpoint).',
+  {
+    id: z.string().optional().describe('Recording id to update; omit to create.'),
+    name: z.string().optional(),
+    brokerId: z.string(),
+    filter: z.string().describe('Topic filter (wildcards + / # allowed).'),
+    target: z.object({ type: z.enum(['file', 'historian']), historianId: z.string().optional() }).optional()
+      .describe('Where captured points go (default { type: "file" }); historian targets need historianId.'),
+    maxBytes: z.number().optional().describe('Size cap for file recordings.'),
+    enabled: z.boolean().optional().describe('Default true; false stops capture.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/recorder', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'recorder_delete',
+  'Delete a recording config AND its captured data file (changes server state). To merely stop capture, use recorder_save with enabled: false.',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/recorder/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'recorder_data',
+  'Read back captured points from a recording (bounded).',
+  {
+    id: z.string(),
+    topic: z.string().optional().describe('Filter to one topic.'),
+    from: z.number().optional().describe('Start timestamp (ms epoch).'),
+    to: z.number().optional().describe('End timestamp (ms epoch).'),
+    limit: z.number().optional().describe('Max points (default 500).')
+  },
+  async ({ id, topic, from, to, limit }) => {
+    try {
+      const q = new URLSearchParams({
+        ...(topic ? { topic } : {}),
+        ...(from ? { from: String(from) } : {}),
+        ...(to ? { to: String(to) } : {}),
+        ...(limit ? { limit: String(limit) } : {})
+      });
+      const qs = q.toString() ? `?${q}` : '';
+      return ok(await api(`/api/recorder/${encodeURIComponent(id)}/data${qs}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'replay_start',
+  'Start replaying a recording onto a broker (changes server state: publishes the recorded messages live).',
+  {
+    recordingId: z.string(),
+    brokerId: z.string().describe('Broker to publish onto.'),
+    speed: z.number().optional().describe('Playback speed multiplier.'),
+    loop: z.boolean().optional().describe('Restart from the beginning when done.'),
+    topicPrefix: z.string().optional().describe('Prefix prepended to replayed topics.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/recorder/replay', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'replay_stop',
+  'Stop the active replay (changes server state).',
+  {},
+  async () => {
+    try {
+      return ok(await api('/api/recorder/replay', { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'alert_rule_save',
+  'Create or update an alert rule (changes server state). Types: branch-silent (no traffic under path), topic-silent (a specific topic goes quiet; requires topic), new-topic (new topic appears under prefix). Optional webhookUrl is POSTed on firing.',
+  {
+    id: z.string().optional().describe('Rule id to update; omit to create.'),
+    name: z.string().optional(),
+    type: z.enum(['branch-silent', 'topic-silent', 'new-topic']),
+    brokerId: z.string(),
+    path: z.string().optional().describe('UNS branch path for branch-silent rules.'),
+    topic: z.string().optional().describe('Exact topic for topic-silent rules (required for that type).'),
+    prefix: z.string().optional().describe('Topic prefix for new-topic rules.'),
+    thresholdMs: z.number().optional().describe('Silence threshold in ms (default 60000).'),
+    webhookUrl: z.string().optional().describe('Webhook to POST when the rule fires.'),
+    enabled: z.boolean().optional().describe('Default true.')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/alerts/rules', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'alert_rule_delete',
+  'Delete an alert rule (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/alerts/rules/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'alert_events',
+  'Recent alert firings, newest first.',
+  { limit: z.number().optional().describe('Max events (default 200, max 500).') },
+  async ({ limit }) => {
+    try {
+      return ok(await api(`/api/alerts/events${limit ? `?limit=${Number(limit)}` : ''}`));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mount_save',
+  'Add a UNS mount (changes server state): graft an external source (an OPC UA connection or the i3X namespace) into the Unified Namespace view. Always creates a new mount.',
+  {
+    type: z.enum(['opcua', 'i3x']),
+    connectionId: z.string().optional().describe('OPC UA connectionId (required for opcua mounts).'),
+    label: z.string().optional().describe('Display label in the UNS tree.'),
+    nodeId: z.string().optional().describe('OPC UA node to mount from (defaults to Objects).')
+  },
+  async (args) => {
+    try {
+      return ok(await api('/api/uns/mounts', { method: 'POST', body: JSON.stringify(args) }));
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+server.tool(
+  'mount_delete',
+  'Remove a UNS mount (changes server state).',
+  { id: z.string() },
+  async ({ id }) => {
+    try {
+      return ok(await api(`/api/uns/mounts/${encodeURIComponent(id)}`, { method: 'DELETE' }));
     } catch (error) {
       return fail(error);
     }

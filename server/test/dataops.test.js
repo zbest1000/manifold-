@@ -143,6 +143,165 @@ test('timebase writePath override and unsupported types', async () => {
   await assert.rejects(() => historians.writePoints({ type: 'nope', url: 'x' }, [{ tag: 't', ts: 1, value: 2 }], fetchImpl), /unsupported historian/);
 });
 
+// ---- historian read-back (Trends) ------------------------------------------------
+
+test('influx queryTags lists topics via schema.tagValues and filters client-side', async () => {
+  let captured;
+  const csv = [
+    '#group,false,false,false',
+    '#datatype,string,long,string',
+    '#default,_result,,',
+    ',result,table,_value',
+    ',_result,0,plant/line1/temp',
+    ',_result,0,plant/line2/temp',
+    ',_result,0,other/pressure',
+    ''
+  ].join('\r\n');
+  const fetchImpl = async (url, opts) => {
+    captured = { url, opts };
+    return { ok: true, status: 200, text: async () => csv };
+  };
+  const conn = { type: 'influxdb', url: 'http://influx:8086/', org: 'acme', bucket: 'uns', token: 'sekrit' };
+
+  const tags = await historians.queryTags(conn, { search: 'line', limit: 100 }, fetchImpl);
+  assert.match(captured.url, /^http:\/\/influx:8086\/api\/v2\/query\?/);
+  assert.match(captured.url, /org=acme/);
+  assert.strictEqual(captured.opts.headers.Authorization, 'Token sekrit');
+  assert.match(captured.opts.body, /import "influxdata\/influxdb\/schema"/);
+  assert.match(captured.opts.body, /schema\.tagValues\(bucket: "uns", tag: "topic", start: -30d\)/);
+  assert.deepStrictEqual(tags, ['plant/line1/temp', 'plant/line2/temp'], 'search substring filters client-side');
+
+  const capped = await historians.queryTags(conn, { search: '', limit: 2 }, fetchImpl);
+  assert.strictEqual(capped.length, 2, 'limit caps the list');
+});
+
+test('influx querySeries builds an aggregated Flux query and parses annotated CSV', async () => {
+  let captured;
+  // Two Flux tables (blank-line separated, headers repeated) — the parser must handle both.
+  const csv = [
+    '#group,false,false,true,true,false,false,true',
+    '#datatype,string,long,dateTime:RFC3339,dateTime:RFC3339,dateTime:RFC3339,double,string',
+    '#default,_result,,,,,,',
+    ',result,table,_start,_stop,_time,_value,topic',
+    ',_result,0,2023-11-14T00:00:00Z,2023-11-15T00:00:00Z,2023-11-14T22:13:20Z,21.5,plant/temp',
+    ',_result,0,2023-11-14T00:00:00Z,2023-11-15T00:00:00Z,2023-11-14T22:13:30Z,22,plant/temp',
+    '',
+    '#group,false,false,true,true,false,false,true',
+    '#datatype,string,long,dateTime:RFC3339,dateTime:RFC3339,dateTime:RFC3339,double,string',
+    '#default,_result,,,,,,',
+    ',result,table,_start,_stop,_time,_value,topic',
+    ',_result,1,2023-11-14T00:00:00Z,2023-11-15T00:00:00Z,2023-11-14T22:13:20Z,3.2,plant/press',
+    ''
+  ].join('\n');
+  const fetchImpl = async (url, opts) => {
+    captured = { url, opts };
+    return { ok: true, status: 200, text: async () => csv };
+  };
+  const conn = { type: 'influxdb', url: 'http://influx:8086', org: 'acme', bucket: 'uns', measurement: 'plantdata' };
+  const start = Date.parse('2023-11-14T00:00:00Z');
+  const end = Date.parse('2023-11-15T00:00:00Z');
+
+  const out = await historians.querySeries(conn, { tags: ['plant/temp', 'plant/press'], start, end, maxPoints: 1000 }, fetchImpl);
+  const flux = captured.opts.body;
+  assert.match(flux, /from\(bucket: "uns"\)/);
+  assert.match(flux, /range\(start: 2023-11-14T00:00:00\.000Z, stop: 2023-11-15T00:00:00\.000Z\)/);
+  assert.match(flux, /r\._measurement == "plantdata" and r\._field == "value"/);
+  assert.match(flux, /r\.topic == "plant\/temp" or r\.topic == "plant\/press"/);
+  // 24h / 1000 points → 87s windows (ceil of 86.4)
+  assert.match(flux, /aggregateWindow\(every: 87s, fn: mean, createEmpty: false\)/);
+
+  assert.strictEqual(out.series.length, 2);
+  const temp = out.series.find((s) => s.tag === 'plant/temp');
+  assert.deepStrictEqual(temp.points, [
+    [Date.parse('2023-11-14T22:13:20Z'), 21.5],
+    [Date.parse('2023-11-14T22:13:30Z'), 22]
+  ]);
+  const press = out.series.find((s) => s.tag === 'plant/press');
+  assert.deepStrictEqual(press.points, [[Date.parse('2023-11-14T22:13:20Z'), 3.2]]);
+
+  // Flux injection is refused, not escaped: tags with quotes/backslashes reject.
+  await assert.rejects(
+    () => historians.querySeries(conn, { tags: ['bad"tag'], start, end }, fetchImpl),
+    /must not contain quotes/
+  );
+});
+
+test('timescale queryTags uses a parameterized ILIKE query (no user text in SQL)', async () => {
+  const queries = [];
+  const fakePool = {
+    query: async (text, values) => {
+      queries.push({ text: text.replace(/\s+/g, ' ').trim(), values });
+      return { rows: [{ topic: 'plant/line1/temp' }, { topic: 'plant/line2/temp' }] };
+    }
+  };
+  const conn = { type: 'timescaledb', host: 'h', database: 'd', user: 'u', __pool: fakePool };
+
+  const tags = await historians.queryTags(conn, { search: "line'; DROP TABLE x;--", limit: 50 });
+  assert.deepStrictEqual(tags, ['plant/line1/temp', 'plant/line2/temp']);
+  const q = queries[0];
+  assert.match(q.text, /SELECT DISTINCT topic FROM manifold_samples WHERE topic ILIKE \$1 ORDER BY topic LIMIT \$2/);
+  assert.deepStrictEqual(q.values, ["%line'; DROP TABLE x;--%", 50]);
+  assert.ok(!q.text.includes('DROP'), 'user text must only travel as a bind parameter');
+});
+
+test('timescale querySeries downsamples with time_bucket and only binds user input', async () => {
+  const queries = [];
+  const fakePool = {
+    query: async (text, values) => {
+      queries.push({ text: text.replace(/\s+/g, ' ').trim(), values });
+      return {
+        rows: [
+          { topic: 'plant/temp', bucket: new Date(1700000000000), value: '21.5' },
+          { topic: 'plant/temp', bucket: new Date(1700000060000), value: 22 },
+          { topic: 'plant/press', bucket: new Date(1700000000000), value: 3.25 }
+        ]
+      };
+    }
+  };
+  const conn = { type: 'timescaledb', host: 'h', database: 'd', user: 'u', __pool: fakePool };
+  const start = 1700000000000;
+  const end = start + 3600_000; // 1h range / 720 points → 5s buckets
+
+  const out = await historians.querySeries(conn, {
+    tags: ["plant/temp'; DROP TABLE x;--", 'plant/press', 'plant/temp'],
+    start,
+    end: new Date(end).toISOString(), // ISO input accepted too
+    maxPoints: 720
+  });
+  const q = queries[0];
+  assert.match(q.text, /time_bucket\('5 seconds'::interval, ts\) AS bucket/);
+  assert.match(q.text, /WHERE topic = ANY\(\$1\) AND ts BETWEEN \$2 AND \$3 AND value IS NOT NULL/);
+  assert.match(q.text, /GROUP BY topic, bucket ORDER BY bucket/);
+  assert.deepStrictEqual(q.values[0], ["plant/temp'; DROP TABLE x;--", 'plant/press', 'plant/temp']);
+  assert.deepStrictEqual(q.values[1], new Date(start));
+  assert.deepStrictEqual(q.values[2], new Date(end));
+  assert.ok(!q.text.includes('DROP'), 'tag text must only travel as a bind parameter');
+  assert.match(q.text, /'5 seconds'/, 'interval literal is a computed integer, not user text');
+
+  const temp = out.series.find((s) => s.tag === 'plant/temp');
+  assert.deepStrictEqual(temp.points, [
+    [1700000000000, 21.5],
+    [1700000060000, 22]
+  ]);
+  assert.deepStrictEqual(out.series.find((s) => s.tag === 'plant/press').points, [[1700000000000, 3.25]]);
+});
+
+test('timebase read-back rejects with clear messages; range/tag validation applies to all backends', async () => {
+  const conn = { type: 'timebase', url: 'http://h:4511', dataset: 'D' };
+  await assert.rejects(() => historians.queryTags(conn, {}), /tag listing not supported for timebase — enter the tag path directly/);
+  await assert.rejects(() => historians.querySeries(conn, { tags: ['a'], start: 1000, end: 2000 }), /not supported for timebase/);
+
+  const influx = { type: 'influxdb', url: 'http://i:8086', org: 'o', bucket: 'b' };
+  await assert.rejects(() => historians.querySeries(influx, { tags: [], start: 1000, end: 2000 }), /1-10 non-empty strings/);
+  await assert.rejects(
+    () => historians.querySeries(influx, { tags: Array.from({ length: 11 }, (_, i) => `t${i}`), start: 1000, end: 2000 }),
+    /1-10 non-empty strings/
+  );
+  await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 2000, end: 1000 }), /end must be after start/);
+  await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 'nope', end: 2000 }), /ISO timestamps or epoch milliseconds/);
+  await assert.rejects(() => historians.querySeries(influx, { tags: ['a'], start: 1000, end: 2000, maxPoints: 5 }), /between 10 and 5000/);
+});
+
 // ---- transforms ------------------------------------------------------------------
 
 test('applyTemplate substitutes segments, tails, and the whole topic', () => {

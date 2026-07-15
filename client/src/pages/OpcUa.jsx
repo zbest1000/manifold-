@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box } from 'lucide-react';
+import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
@@ -36,6 +36,7 @@ export default function OpcUa() {
   const [selected, setSelected] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', endpointUrl: 'opc.tcp://localhost:4840' });
+  const [editingId, setEditingId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [matchIds, setMatchIds] = useState(null);
   const [view, setView] = useState('graph');
@@ -82,9 +83,11 @@ export default function OpcUa() {
     if (!form.endpointUrl) return toast.error('Endpoint URL is required');
     setBusy(true);
     try {
-      const res = await api.connectOpcua(form);
-      toast.success('Connected to OPC UA server');
+      const res = editingId ? await api.updateOpcuaConnection(editingId, form) : await api.connectOpcua(form);
+      toast.success(editingId ? 'Connection updated' : 'Connected to OPC UA server');
       setShowForm(false);
+      setEditingId(null);
+      setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' });
       setConnectionId(res.connectionId);
       const list = await api.listOpcua();
       setOpcua(list.connections);
@@ -93,6 +96,13 @@ export default function OpcUa() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Load the selected connection's config into the connect form for editing.
+  const edit = (c) => {
+    setForm({ name: c.name || '', endpointUrl: c.endpointUrl });
+    setEditingId(c.id);
+    setShowForm(true);
   };
 
   const expandNode = async (node) => {
@@ -157,7 +167,10 @@ export default function OpcUa() {
               <select
                 value={connectionId || ''}
                 onChange={(e) => setConnectionId(e.target.value)}
-                className="rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-200 focus:border-accent-500/60 focus:outline-none"
+                className={clsx(
+                  'rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-200 focus:border-accent-500/60 focus:outline-none',
+                  editingId && 'ring-1 ring-accent-500/40'
+                )}
               >
                 {connected.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -166,7 +179,20 @@ export default function OpcUa() {
                 ))}
               </select>
             )}
-            <Button variant="outline" onClick={() => setShowForm((v) => !v)}>
+            {connection && (
+              <button
+                aria-label="Edit connection"
+                title="Edit this connection"
+                onClick={() => edit(connection)}
+                className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-accent-400"
+              >
+                <Pencil size={13} />
+              </button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => { setEditingId(null); setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' }); setShowForm((v) => !v); }}
+            >
               <Plus size={15} /> Connect
             </Button>
           </div>
@@ -184,11 +210,11 @@ export default function OpcUa() {
             </Field>
           </div>
           <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setShowForm(false)}>
+            <Button variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' }); }}>
               Cancel
             </Button>
             <Button onClick={connect} disabled={busy}>
-              <Cpu size={15} /> Connect
+              <Cpu size={15} /> {editingId ? 'Save changes' : 'Connect'}
             </Button>
           </div>
         </Card>

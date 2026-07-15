@@ -95,6 +95,10 @@ export const api = {
   saveHistorian: (h) => request('/api/historians', { method: 'POST', body: JSON.stringify(h) }),
   deleteHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   testHistorian: (id) => request(`/api/historians/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  historianTags: (id, search = '', limit = 100) =>
+    request(`/api/historians/${encodeURIComponent(id)}/tags?search=${encodeURIComponent(search)}&limit=${limit}`),
+  historianQuery: (id, body) =>
+    request(`/api/historians/${encodeURIComponent(id)}/query`, { method: 'POST', body: JSON.stringify(body) }),
 
   // Pipelines
   listPipelines: () => request('/api/pipelines'),
@@ -198,5 +202,11 @@ export const api = {
   },
   i3xValue: (elementIds, maxDepth = 1) =>
     request('/api/i3x/value', { method: 'POST', body: JSON.stringify({ elementIds, maxDepth }) }),
-  i3xHistory: (body) => request('/api/i3x/history', { method: 'POST', body: JSON.stringify(body) })
+  i3xHistory: (body) => request('/api/i3x/history', { method: 'POST', body: JSON.stringify(body) }),
+
+  // In-place edits (disconnect → upsert same id → reconnect on the server)
+  updateBroker: (id, config) =>
+    request(`/api/mqtt/brokers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) }),
+  updateOpcuaConnection: (id, config) =>
+    request(`/api/opcua/connections/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) })
 };

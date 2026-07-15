@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Radio, Plus, Trash2, Server, ChevronRight } from 'lucide-react';
+import { Radio, Plus, Trash2, Server, ChevronRight, Pencil } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
@@ -33,38 +33,72 @@ export default function Brokers() {
   const [form, setForm] = useState(BLANK);
   const [showForm, setShowForm] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const connect = async () => {
+  const buildConfig = () => ({
+    name: form.name || undefined,
+    host: form.host,
+    port: Number(form.port),
+    protocol: form.protocol,
+    username: form.username || undefined,
+    // Blank while editing = keep the stored password (never echoed back).
+    password: form.password || undefined,
+    clientId: form.clientId || undefined,
+    keepalive: Number(form.keepalive) || 60,
+    timeout: Number(form.timeout) || 15000,
+    reconnect: form.reconnect,
+    reconnectPeriod: Number(form.reconnectPeriod) || 5000,
+    maxReconnect: Number(form.maxReconnect) || 0,
+    cleanSession: form.cleanSession,
+    autoSubscribe: form.autoSubscribe,
+    subscribeQos: Number(form.subscribeQos),
+    rejectUnauthorized: form.rejectUnauthorized
+  });
+
+  const closeForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(BLANK);
+  };
+
+  const save = async () => {
     if (!form.host) return toast.error('Host is required');
     setBusy(true);
     try {
-      await api.connectBroker({
-        name: form.name || undefined,
-        host: form.host,
-        port: Number(form.port),
-        protocol: form.protocol,
-        username: form.username || undefined,
-        password: form.password || undefined,
-        clientId: form.clientId || undefined,
-        keepalive: Number(form.keepalive) || 60,
-        timeout: Number(form.timeout) || 15000,
-        reconnect: form.reconnect,
-        reconnectPeriod: Number(form.reconnectPeriod) || 5000,
-        maxReconnect: Number(form.maxReconnect) || 0,
-        cleanSession: form.cleanSession,
-        autoSubscribe: form.autoSubscribe,
-        subscribeQos: Number(form.subscribeQos),
-        rejectUnauthorized: form.rejectUnauthorized
-      });
-      toast.success('Connecting to broker…');
-      setForm(BLANK);
-      setShowForm(false);
+      if (editingId) {
+        await api.updateBroker(editingId, buildConfig());
+        toast.success('Broker updated — reconnecting…');
+      } else {
+        await api.connectBroker(buildConfig());
+        toast.success('Connecting to broker…');
+      }
+      closeForm();
     } catch (e) {
       toast.error(e.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  // Load a broker's known config into the form. Fields the server doesn't echo
+  // (password, timeouts) fall back to blanks/defaults.
+  const edit = (b) => {
+    setForm({
+      ...BLANK,
+      name: b.name || '',
+      host: b.host,
+      port: b.port,
+      protocol: b.protocol,
+      username: b.username || '',
+      password: '',
+      clientId: b.clientId || '',
+      autoSubscribe: b.autoSubscribe !== false,
+      subscribeQos: b.subscribeQos ?? 1,
+      maxReconnect: b.maxReconnect || 0
+    });
+    setEditingId(b.id);
+    setShowForm(true);
   };
 
   const disconnect = async (id) => {
@@ -82,7 +116,7 @@ export default function Brokers() {
         title="MQTT Brokers"
         subtitle="Connect to brokers and stream their topic namespaces"
         actions={
-          <Button onClick={() => setShowForm((v) => !v)}>
+          <Button onClick={() => (showForm ? closeForm() : setShowForm(true))}>
             <Plus size={15} /> Add broker
           </Button>
         }
@@ -115,7 +149,12 @@ export default function Brokers() {
                 <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
               </Field>
               <Field label="Password (optional)">
-                <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                <Input
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  placeholder={editingId ? 'unchanged' : undefined}
+                />
               </Field>
             </div>
 
@@ -191,11 +230,11 @@ export default function Brokers() {
             )}
 
             <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setShowForm(false)}>
+              <Button variant="ghost" onClick={closeForm}>
                 Cancel
               </Button>
-              <Button onClick={connect} disabled={busy}>
-                <Radio size={15} /> Connect
+              <Button onClick={save} disabled={busy}>
+                <Radio size={15} /> {editingId ? 'Save changes' : 'Connect'}
               </Button>
             </div>
           </Card>
@@ -211,7 +250,7 @@ export default function Brokers() {
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {brokers.map((b) => (
-              <Card key={b.id} className="p-4">
+              <Card key={b.id} className={clsx('p-4', editingId === b.id && 'ring-1 ring-accent-500/40')}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-sky-400 to-sky-600 shadow-lg">
@@ -236,7 +275,14 @@ export default function Brokers() {
                     valueClassName={(b.metrics?.errors ?? 0) > 0 ? 'text-rose-300' : undefined}
                   />
                 </div>
-                <div className="mt-4 flex justify-end">
+                <div className="mt-4 flex items-center justify-end gap-1.5">
+                  <button
+                    aria-label="Edit broker"
+                    onClick={() => edit(b)}
+                    className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-accent-400"
+                  >
+                    <Pencil size={13} />
+                  </button>
                   <Button variant="danger" size="sm" onClick={() => disconnect(b.id)}>
                     <Trash2 size={13} /> Disconnect
                   </Button>

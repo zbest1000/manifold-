@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 const MqttManager = require('../services/mqttManager');
 const TopicStore = require('../services/topicStore');
@@ -108,6 +109,145 @@ test('disabled rules and unknown brokers are skipped without error', () => {
   assert.strictEqual(io.emitted.length, 0);
   assert.ok(RULE_TYPES.includes('branch-silent'));
   m.shutdown();
+});
+
+// ---- value-threshold rules (live message tap) ----------------------------------
+
+// The engine only needs `.on/.off('message')` from the manager for value rules,
+// so a bare EventEmitter is a faithful fake of the tap.
+function valueEngine(rules) {
+  const manager = new EventEmitter();
+  const io = fakeIo();
+  const eng = new AlertEngine({ io, profiles: { alertRules: () => rules }, mqttManager: manager, fetchImpl: null });
+  eng.start();
+  return { manager, io, eng };
+}
+
+const msg = (brokerId, topic, payload) => ({ brokerId, topic, payload, timestamp: new Date().toISOString() });
+
+test('value-threshold fires on breach via the manager tap and resolves on clear', () => {
+  const rules = [{ id: 'v1', type: 'value-threshold', brokerId: 'b1', topic: 'plant/line1/temp', op: '>', value: 80 }];
+  const { manager, io, eng } = valueEngine(rules);
+
+  manager.emit('message', msg('b1', 'plant/line1/temp', 75));
+  assert.strictEqual(io.emitted.length, 0, 'below the limit must not fire');
+
+  manager.emit('message', msg('b1', 'plant/line1/temp', 90));
+  assert.strictEqual(io.emitted.length, 1);
+  assert.strictEqual(io.emitted[0].data.status, 'firing');
+  assert.strictEqual(io.emitted[0].data.value, 90);
+  assert.strictEqual(io.emitted[0].data.topic, 'plant/line1/temp');
+
+  // still breached → no duplicate firing
+  manager.emit('message', msg('b1', 'plant/line1/temp', 95));
+  assert.strictEqual(io.emitted.length, 1);
+
+  manager.emit('message', msg('b1', 'plant/line1/temp', 60));
+  assert.strictEqual(io.emitted.length, 2);
+  assert.strictEqual(io.emitted[1].data.status, 'resolved');
+  assert.strictEqual(io.emitted[1].data.value, 60);
+
+  eng.stop();
+  assert.strictEqual(manager.listenerCount('message'), 0, 'stop() must detach the tap');
+});
+
+test('value-threshold sustainMs holds firing until the breach persists continuously', () => {
+  const rules = [{ id: 'v2', type: 'value-threshold', brokerId: 'b1', topic: 't', op: '>=', value: 100, sustainMs: 40 }];
+  const { io, eng } = valueEngine(rules);
+  const t0 = Date.now();
+
+  eng.onMessage(msg('b1', 't', 100), t0);
+  eng.onMessage(msg('b1', 't', 120), t0 + 10);
+  assert.strictEqual(io.emitted.length, 0, 'breach younger than sustainMs must not fire');
+
+  // condition drops → sustain clock resets
+  eng.onMessage(msg('b1', 't', 50), t0 + 20);
+  eng.onMessage(msg('b1', 't', 130), t0 + 30);
+  eng.onMessage(msg('b1', 't', 130), t0 + 65);
+  assert.strictEqual(io.emitted.length, 0, 'reset breach at +30 is only 35ms old at +65');
+
+  eng.onMessage(msg('b1', 't', 130), t0 + 75);
+  assert.strictEqual(io.emitted.length, 1);
+  assert.strictEqual(io.emitted[0].data.status, 'firing');
+  eng.stop();
+});
+
+test('value-threshold extracts nested fields via dot-path', () => {
+  const rules = [{ id: 'v3', type: 'value-threshold', brokerId: 'b1', topic: 'machine/state', field: 'data.temp', op: '<', value: 10 }];
+  const { manager, io, eng } = valueEngine(rules);
+
+  manager.emit('message', msg('b1', 'machine/state', { data: { temp: 15 } }));
+  assert.strictEqual(io.emitted.length, 0);
+  manager.emit('message', msg('b1', 'machine/state', { data: { temp: 3 } }));
+  assert.strictEqual(io.emitted.length, 1);
+  assert.strictEqual(io.emitted[0].data.value, 3);
+  // path missing → ignored, state untouched
+  manager.emit('message', msg('b1', 'machine/state', { other: 1 }));
+  assert.strictEqual(io.emitted.length, 1);
+  eng.stop();
+});
+
+test('value-threshold matches topic filters with + and respects brokerId', () => {
+  const rules = [{ id: 'v4', type: 'value-threshold', brokerId: 'b1', topic: 'plant/+/temp', op: '>', value: 80 }];
+  const { manager, io, eng } = valueEngine(rules);
+
+  manager.emit('message', msg('b2', 'plant/line1/temp', 99)); // wrong broker
+  manager.emit('message', msg('b1', 'plant/line1/hum', 99)); // filter miss
+  manager.emit('message', msg('b1', 'plant/line1/temp/extra', 99)); // deeper than filter
+  assert.strictEqual(io.emitted.length, 0);
+
+  manager.emit('message', msg('b1', 'plant/line7/temp', 99));
+  assert.strictEqual(io.emitted.length, 1);
+  assert.strictEqual(io.emitted[0].data.topic, 'plant/line7/temp');
+  eng.stop();
+});
+
+test('value-threshold ignores non-numeric payloads and coercion traps', () => {
+  const rules = [
+    { id: 'v5', type: 'value-threshold', brokerId: 'b1', topic: 'a', op: '>', value: 0 },
+    { id: 'v6', type: 'value-threshold', brokerId: 'b1', topic: 'b', field: 'v', op: '>', value: 0 }
+  ];
+  const { manager, io, eng } = valueEngine(rules);
+
+  manager.emit('message', msg('b1', 'a', 'hello'));
+  manager.emit('message', msg('b1', 'a', '')); // Number('') === 0 — must not evaluate
+  manager.emit('message', msg('b1', 'a', true)); // Number(true) === 1 — must not evaluate
+  manager.emit('message', msg('b1', 'a', { v: 5 })); // object without a field path
+  manager.emit('message', msg('b1', 'b', { v: 'not-a-number' }));
+  manager.emit('message', msg('b1', 'b', 42)); // scalar payload but rule wants a field
+  assert.strictEqual(io.emitted.length, 0);
+
+  manager.emit('message', msg('b1', 'a', '5')); // numeric string is honest data
+  manager.emit('message', msg('b1', 'b', { v: 5 }));
+  assert.strictEqual(io.emitted.length, 2);
+  eng.stop();
+});
+
+test('value-threshold clearValue hysteresis holds firing through the deadband', () => {
+  const rules = [{ id: 'v7', type: 'value-threshold', brokerId: 'b1', topic: 't', op: '>', value: 80, clearValue: 75 }];
+  const { manager, io, eng } = valueEngine(rules);
+
+  manager.emit('message', msg('b1', 't', 90));
+  assert.strictEqual(io.emitted.length, 1);
+  assert.strictEqual(io.emitted[0].data.status, 'firing');
+
+  // 78 is below the limit but above the clear level → still firing, no flap
+  manager.emit('message', msg('b1', 't', 78));
+  assert.strictEqual(io.emitted.length, 1);
+
+  // dipping back into breach from the deadband must not re-fire
+  manager.emit('message', msg('b1', 't', 85));
+  assert.strictEqual(io.emitted.length, 1);
+
+  manager.emit('message', msg('b1', 't', 74));
+  assert.strictEqual(io.emitted.length, 2);
+  assert.strictEqual(io.emitted[1].data.status, 'resolved');
+
+  // fresh breach after resolve fires again
+  manager.emit('message', msg('b1', 't', 81));
+  assert.strictEqual(io.emitted.length, 3);
+  assert.strictEqual(io.emitted[2].data.status, 'firing');
+  eng.stop();
 });
 
 test('historyStore snapshots recent rings and restores them into empty rings', () => {

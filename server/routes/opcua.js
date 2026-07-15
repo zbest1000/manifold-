@@ -19,6 +19,30 @@ router.post('/connections', async (req, res) => {
   }
 });
 
+// PUT /api/opcua/connections/:connectionId — update a saved endpoint in place:
+// disconnect the existing session, reconnect under the SAME id, persist the new
+// config on success (like POST). Validated like POST (endpointUrl is required).
+router.put('/connections/:connectionId', async (req, res) => {
+  const { opcuaManager, profiles } = req.app.locals.services;
+  const connectionId = req.params.connectionId;
+  const saved = profiles?.opcuaEndpoints().find((c) => c.id === connectionId);
+  if (!opcuaManager.getConnections().some((c) => c.id === connectionId) && !saved) {
+    return res.status(404).json({ error: 'OPC UA connection not found' });
+  }
+  const body = req.body || {};
+  // Leave-blank-to-keep: an omitted password keeps the stored one.
+  if (body.password === undefined && saved?.password !== undefined) {
+    body.password = saved.password;
+  }
+  try {
+    const result = await opcuaManager.updateConnection(connectionId, body);
+    profiles?.upsertOpcua(connectionId, { ...body, id: connectionId });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // DELETE /api/opcua/connections/:connectionId (profile removed)
 router.delete('/connections/:connectionId', async (req, res) => {
   const { opcuaManager, profiles } = req.app.locals.services;

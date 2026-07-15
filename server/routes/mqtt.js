@@ -19,6 +19,32 @@ router.post('/brokers', (req, res) => {
   }
 });
 
+// PUT /api/mqtt/brokers/:brokerId — update a saved broker in place: disconnect
+// the running client, persist the new config under the SAME id, reconnect.
+// The normal disconnect/connection-attempt socket events fire so client
+// stores stay truthful. Validated like POST (host is required).
+router.put('/brokers/:brokerId', (req, res) => {
+  const { mqttManager, profiles } = req.app.locals.services;
+  const brokerId = req.params.brokerId;
+  const saved = profiles?.brokers().find((b) => b.config?.id === brokerId);
+  if (!mqttManager.getConnection(brokerId) && !saved) {
+    return res.status(404).json({ error: 'Broker not found' });
+  }
+  const body = req.body || {};
+  // Leave-blank-to-keep: the list endpoint never echoes credentials, so a body
+  // that omits the password keeps the stored one (same pattern as historians).
+  if (body.password === undefined && saved?.config?.password !== undefined) {
+    body.password = saved.config.password;
+  }
+  try {
+    const result = mqttManager.updateBroker(brokerId, body);
+    profiles?.upsertBroker(brokerId, { ...body, id: brokerId });
+    res.status(202).json(result);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // GET /api/mqtt/brokers/:brokerId
 router.get('/brokers/:brokerId', (req, res) => {
   const { mqttManager } = req.app.locals.services;

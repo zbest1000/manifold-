@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Workflow, Boxes, Database, CircleDot, FileCheck2, Trash2, Plus, Play, Square,
-  Eye, RefreshCw, AlertTriangle, CheckCircle2, Power
+  Eye, RefreshCw, AlertTriangle, CheckCircle2, Power, Pencil
 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
@@ -155,7 +155,7 @@ function RoutesTab({ brokers }) {
       {data.routes.map((route) => {
         const m = data.metrics[route.id] || {};
         return (
-          <Card key={route.id} className="p-3">
+          <Card key={route.id} className={clsx('p-3', draft?.id === route.id && 'ring-1 ring-accent-500/40')}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -174,6 +174,13 @@ function RoutesTab({ brokers }) {
                 </span>
                 <button onClick={() => toggle(route)} title={route.enabled ? 'Pause' : 'Resume'} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10">
                   <Power size={13} />
+                </button>
+                <button
+                  onClick={() => { setPreview(null); setDraft({ ...route, source: { ...route.source }, target: { ...route.target }, transforms: (route.transforms || []).map((t) => ({ ...t })) }); }}
+                  title="Edit route"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-accent-400"
+                >
+                  <Pencil size={13} />
                 </button>
                 <button
                   onClick={() => api.deletePipeline(route.id).then(load)}
@@ -197,7 +204,7 @@ function RoutesTab({ brokers }) {
 
       {draft && (
         <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">New route</h3>
+          <h3 className="mb-3 text-sm font-semibold text-slate-200">{draft.id ? 'Edit route' : 'New route'}</h3>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Field label="Name">
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="normalize line1" />
@@ -287,7 +294,7 @@ function RoutesTab({ brokers }) {
               <Eye size={14} className="mr-1" /> Dry-run preview
             </Button>
             <Button onClick={save} disabled={!draft.source.filter || (draft.target.type === 'historian' && !draft.target.historianId)}>
-              Save route
+              {draft.id ? 'Save changes' : 'Save route'}
             </Button>
             <Button variant="ghost" onClick={() => { setDraft(null); setPreview(null); }}>
               Cancel
@@ -415,7 +422,7 @@ function ModelsTab({ brokers }) {
       {data.models.map((m) => {
         const s = data.status[m.id] || {};
         return (
-          <Card key={m.id} className="p-3">
+          <Card key={m.id} className={clsx('p-3', draft?.id === m.id && 'ring-1 ring-accent-500/40')}>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -431,6 +438,13 @@ function ModelsTab({ brokers }) {
                   {s.boundAttributes ?? 0}/{m.attributes.length} bound · {s.publishes || 0} pub
                   {s.errors ? <span className="text-rose-300"> · {s.errors} err</span> : null}
                 </span>
+                <button
+                  onClick={() => setDraft({ ...m, target: { ...m.target }, attributes: m.attributes.map((a) => ({ name: a.name, source: { ...a.source, field: a.source.field || '' } })) })}
+                  title="Edit model"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-accent-400"
+                >
+                  <Pencil size={13} />
+                </button>
                 <button onClick={() => api.deleteModel(m.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                   <Trash2 size={13} />
                 </button>
@@ -447,7 +461,7 @@ function ModelsTab({ brokers }) {
       )}
       {draft && (
         <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">New model</h3>
+          <h3 className="mb-3 text-sm font-semibold text-slate-200">{draft.id ? 'Edit model' : 'New model'}</h3>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Field label="Name">
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Pump-7" />
@@ -492,7 +506,7 @@ function ModelsTab({ brokers }) {
             </Button>
           </div>
           <div className="mt-4 flex gap-2">
-            <Button onClick={save} disabled={!draft.target.topic || !draft.attributes.some((a) => a.name && a.source.topic)}>Save model</Button>
+            <Button onClick={save} disabled={!draft.target.topic || !draft.attributes.some((a) => a.name && a.source.topic)}>{draft.id ? 'Save changes' : 'Save model'}</Button>
             <Button variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
           </div>
         </Card>
@@ -503,10 +517,13 @@ function ModelsTab({ brokers }) {
 
 // ---------------------------------------------------------------- Historians tab
 
+const BLANK_HISTORIAN = { type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', writePath: '', apiKey: '', host: '', port: '', database: '', user: '', password: '', table: '', ssl: false, dropPolicy: 'newest' };
+
 function HistoriansTab() {
   const [data, setData] = useState({ historians: [], types: [] });
   const [outbox, setOutbox] = useState({});
-  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', writePath: '', apiKey: '', host: '', port: '', database: '', user: '', password: '', table: '', ssl: false, dropPolicy: 'newest' });
+  const [form, setForm] = useState(BLANK_HISTORIAN);
+  const [editingId, setEditingId] = useState(null);
   const [testing, setTesting] = useState(null); // id -> result
   const load = useCallback(() => api.listHistorians().then(setData).catch(() => {}), []);
   useEffect(() => {
@@ -516,13 +533,51 @@ function HistoriansTab() {
 
   const save = async () => {
     try {
-      await api.saveHistorian(form);
-      setForm((f) => ({ ...f, name: '', url: '', org: '', bucket: '', token: '', dataset: '' }));
+      const payload = { ...form };
+      if (editingId) {
+        payload.id = editingId;
+        // The list endpoint never echoes secrets — an empty field means "keep
+        // the stored one", so omit the key entirely (the server preserves
+        // stored secrets only for omitted keys).
+        for (const k of ['token', 'apiKey', 'password']) {
+          if (!payload[k]) delete payload[k];
+        }
+      }
+      await api.saveHistorian(payload);
+      if (editingId) {
+        setEditingId(null);
+        setForm(BLANK_HISTORIAN);
+      } else {
+        setForm((f) => ({ ...f, name: '', url: '', org: '', bucket: '', token: '', dataset: '' }));
+      }
       load();
       toast.success('Historian saved');
     } catch (e) {
       toast.error(e.message);
     }
+  };
+
+  // Load a historian into the form; secret fields stay blank (= unchanged).
+  const edit = (h) => {
+    setForm({
+      ...BLANK_HISTORIAN,
+      type: h.type,
+      name: h.name || '',
+      url: h.url || '',
+      org: h.org || '',
+      bucket: h.bucket || '',
+      measurement: h.measurement || '',
+      dataset: h.dataset || '',
+      writePath: h.writePath || '',
+      host: h.host || '',
+      port: h.port || '',
+      database: h.database || '',
+      user: h.user || '',
+      table: h.table || '',
+      ssl: Boolean(h.ssl),
+      dropPolicy: h.dropPolicy || 'newest'
+    });
+    setEditingId(h.id);
   };
 
   const test = async (id) => {
@@ -538,7 +593,7 @@ function HistoriansTab() {
   return (
     <>
       {data.historians.map((h) => (
-        <Card key={h.id} className="p-3">
+        <Card key={h.id} className={clsx('p-3', editingId === h.id && 'ring-1 ring-accent-500/40')}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -574,6 +629,9 @@ function HistoriansTab() {
               <Button size="sm" variant="outline" onClick={() => test(h.id)} disabled={testing?.id === h.id && testing.state === 'running'}>
                 <RefreshCw size={12} className={clsx('mr-1', testing?.id === h.id && testing.state === 'running' && 'animate-spin')} /> Test write
               </Button>
+              <button onClick={() => edit(h)} title="Edit historian" className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-accent-400">
+                <Pencil size={13} />
+              </button>
               <button onClick={() => api.deleteHistorian(h.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                 <Trash2 size={13} />
               </button>
@@ -583,7 +641,7 @@ function HistoriansTab() {
       ))}
 
       <Card className="p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Add historian</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{editingId ? 'Edit historian' : 'Add historian'}</h3>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Field label="Type">
             <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200">
@@ -627,7 +685,7 @@ function HistoriansTab() {
                 <Input value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} />
               </Field>
               <Field label="Password">
-                <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={editingId ? 'unchanged' : undefined} />
               </Field>
               <Field label="Table (optional)">
                 <Input value={form.table} onChange={(e) => setForm({ ...form, table: e.target.value })} placeholder="manifold_samples" />
@@ -646,7 +704,7 @@ function HistoriansTab() {
                 <Input value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} />
               </Field>
               <Field label="Token">
-                <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />
+                <Input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder={editingId ? 'unchanged' : undefined} />
               </Field>
               <Field label="Measurement (optional)">
                 <Input value={form.measurement} onChange={(e) => setForm({ ...form, measurement: e.target.value })} placeholder="manifold" />
@@ -659,7 +717,7 @@ function HistoriansTab() {
                 <Input value={form.dataset} onChange={(e) => setForm({ ...form, dataset: e.target.value })} placeholder="Manifold" />
               </Field>
               <Field label="API key (optional)">
-                <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
+                <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={editingId ? 'unchanged' : undefined} />
               </Field>
               <Field label="Write path (optional)" className="col-span-2">
                 <Input value={form.writePath} onChange={(e) => setForm({ ...form, writePath: e.target.value })} placeholder="/api/tags/data — confirm on your instance's :4511/api/help" />
@@ -674,19 +732,25 @@ function HistoriansTab() {
             at this broker, or at a pipeline's output namespace, is an equally good path.
           </p>
         )}
-        <Button
-          className="mt-3"
-          onClick={save}
-          disabled={
-            form.type === 'timescaledb'
-              ? !form.host || !form.database || !form.user
-              : !form.url ||
-                (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
-                (form.type === 'timebase' && !form.dataset)
-          }
-        >
-          <Plus size={14} className="mr-1" /> Add historian
-        </Button>
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            onClick={save}
+            disabled={
+              form.type === 'timescaledb'
+                ? !form.host || !form.database || !form.user
+                : !form.url ||
+                  (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
+                  (form.type === 'timebase' && !form.dataset)
+            }
+          >
+            {editingId ? 'Save changes' : <><Plus size={14} className="mr-1" /> Add historian</>}
+          </Button>
+          {editingId && (
+            <Button variant="ghost" onClick={() => { setEditingId(null); setForm(BLANK_HISTORIAN); }}>
+              Cancel
+            </Button>
+          )}
+        </div>
       </Card>
     </>
   );

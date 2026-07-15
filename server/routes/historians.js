@@ -82,4 +82,49 @@ router.post('/:id/test', async (req, res) => {
   }
 });
 
+// ---- read-back (Trends page) -------------------------------------------------
+
+const parseTs = (v) => (typeof v === 'number' || /^\d+$/.test(String(v)) ? Number(v) : Date.parse(String(v)));
+
+// GET /api/historians/:id/tags?search=&limit= — distinct stored topic names
+router.get('/:id/tags', async (req, res) => {
+  const { profiles } = req.app.locals.services;
+  const conn = profiles.getIn('historians', req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Historian not found' });
+  const search = String(req.query.search || '');
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  try {
+    const tags = await historians.queryTags(conn, { search, limit });
+    res.json({ tags });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+// POST /api/historians/:id/query { tags, start, end, maxPoints } — downsampled series
+router.post('/:id/query', async (req, res) => {
+  const { profiles } = req.app.locals.services;
+  const conn = profiles.getIn('historians', req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Historian not found' });
+  const { tags, start, end, maxPoints } = req.body || {};
+  if (!Array.isArray(tags) || tags.length < 1 || tags.length > 10 || tags.some((t) => typeof t !== 'string' || !t.trim())) {
+    return res.status(400).json({ error: 'tags must be an array of 1-10 non-empty strings' });
+  }
+  const s = parseTs(start);
+  const e = parseTs(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) {
+    return res.status(400).json({ error: 'start and end must be ISO timestamps or epoch milliseconds' });
+  }
+  if (e <= s) return res.status(400).json({ error: 'end must be after start' });
+  const mp = maxPoints === undefined ? 1000 : Number(maxPoints);
+  if (!Number.isFinite(mp) || mp < 10 || mp > 5000) {
+    return res.status(400).json({ error: 'maxPoints must be between 10 and 5000' });
+  }
+  try {
+    res.json(await historians.querySeries(conn, { tags, start: s, end: e, maxPoints: Math.round(mp) }));
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
 module.exports = router;

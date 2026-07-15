@@ -206,6 +206,221 @@ async function timescaleWrite(conn, points) {
   return { written: points.length };
 }
 
+// ---- read-back (Trends) ------------------------------------------------------
+//
+// The write path above is one-way; these two calls close the loop so the UI can
+// trend what Manifold recorded:
+//   queryTags(conn, { search, limit })            -> string[] of topic names
+//   querySeries(conn, { tags, start, end, maxPoints }) -> { series: [{ tag, points: [[tsMs, value], ...] }] }
+// start/end are epoch ms (the route normalizes ISO input). Timebase has no
+// generic read API surface we can target, so both calls reject with a clear
+// message and the UI degrades to free-text tag entry / a hint.
+
+/** Millisecond timestamp from epoch-ms number or ISO string. */
+function toMillis(v) {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+  return Date.parse(v);
+}
+
+function normalizeRange({ start, end, maxPoints = 1000 }) {
+  const s = toMillis(start);
+  const e = toMillis(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) throw new Error('start and end must be ISO timestamps or epoch milliseconds');
+  if (e <= s) throw new Error('end must be after start');
+  const mp = Math.round(Number(maxPoints));
+  if (!Number.isFinite(mp) || mp < 10 || mp > 5000) throw new Error('maxPoints must be between 10 and 5000');
+  return { start: s, end: e, maxPoints: mp };
+}
+
+/**
+ * Quote a value for interpolation into a Flux script. Flux has no parameter
+ * binding over the raw /query endpoint, so rather than attempt clever escaping
+ * we REJECT values containing quote/backslash/newline — topic names never
+ * legitimately contain them and a reject can't be out-escaped.
+ */
+function fluxString(value, what) {
+  const s = String(value);
+  if (/["\\\n\r]/.test(s)) throw new Error(`${what} must not contain quotes, backslashes, or newlines`);
+  return `"${s}"`;
+}
+
+function splitCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * Parse InfluxDB annotated CSV into row objects keyed by column name.
+ * `#`-prefixed annotation lines are skipped; a blank line ends a table so the
+ * next non-blank line is a fresh header (multi-table responses).
+ */
+function parseFluxCsv(text) {
+  const rows = [];
+  let header = null;
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line.trim()) {
+      header = null;
+      continue;
+    }
+    if (line.startsWith('#')) continue;
+    const cells = splitCsvLine(line);
+    if (!header) {
+      header = cells;
+      continue;
+    }
+    const row = {};
+    for (let i = 0; i < header.length; i++) if (header[i]) row[header[i]] = cells[i];
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function influxQuery(conn, flux, fetchImpl) {
+  const base = String(conn.url || '').replace(/\/+$/, '');
+  if (!base) throw new Error('influxdb url is required');
+  const q = new URLSearchParams({ org: conn.org || '' });
+  const res = await fetchImpl(`${base}/api/v2/query?${q}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/vnd.flux',
+      Accept: 'application/csv',
+      ...(conn.token ? { Authorization: `Token ${conn.token}` } : {})
+    },
+    body: flux
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`influxdb query failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
+  }
+  return parseFluxCsv(await res.text());
+}
+
+async function influxQueryTags(conn, { search, limit }, fetchImpl) {
+  const flux = `import "influxdata/influxdb/schema"\nschema.tagValues(bucket: ${fluxString(conn.bucket, 'bucket')}, tag: "topic", start: -30d)`;
+  const rows = await influxQuery(conn, flux, fetchImpl);
+  const needle = search.toLowerCase();
+  const seen = new Set();
+  for (const row of rows) {
+    const v = row._value;
+    if (v && (!needle || v.toLowerCase().includes(needle))) seen.add(v);
+  }
+  return [...seen].sort().slice(0, limit);
+}
+
+async function influxQuerySeries(conn, { tags, start, end, maxPoints }, fetchImpl) {
+  const everySec = Math.max(1, Math.ceil((end - start) / 1000 / maxPoints));
+  const topicFilter = tags.map((t) => `r.topic == ${fluxString(t, 'tag')}`).join(' or ');
+  const flux = [
+    `from(bucket: ${fluxString(conn.bucket, 'bucket')})`,
+    `  |> range(start: ${new Date(start).toISOString()}, stop: ${new Date(end).toISOString()})`,
+    `  |> filter(fn: (r) => r._measurement == ${fluxString(conn.measurement || 'manifold', 'measurement')} and r._field == "value")`,
+    `  |> filter(fn: (r) => ${topicFilter})`,
+    `  |> aggregateWindow(every: ${everySec}s, fn: mean, createEmpty: false)`,
+    `  |> keep(columns: ["_time", "_value", "topic"])`
+  ].join('\n');
+  const rows = await influxQuery(conn, flux, fetchImpl);
+  const byTag = new Map(tags.map((t) => [t, []]));
+  for (const row of rows) {
+    if (!byTag.has(row.topic) || !row._time || row._value === '' || row._value === undefined) continue;
+    const ts = Date.parse(row._time);
+    const value = Number(row._value);
+    if (Number.isFinite(ts) && Number.isFinite(value)) byTag.get(row.topic).push([ts, value]);
+  }
+  return { series: tags.map((tag) => ({ tag, points: byTag.get(tag) })) };
+}
+
+async function timescaleQueryTags(conn, { search, limit }) {
+  const table = safeIdent(conn.table || 'manifold_samples');
+  const { pool } = pgEntryFor(conn);
+  const { rows } = await pool.query(
+    `SELECT DISTINCT topic FROM ${table} WHERE topic ILIKE $1 ORDER BY topic LIMIT $2`,
+    [`%${search}%`, limit]
+  );
+  return rows.map((r) => r.topic);
+}
+
+async function timescaleQuerySeries(conn, { tags, start, end, maxPoints }) {
+  const table = safeIdent(conn.table || 'manifold_samples');
+  const { pool } = pgEntryFor(conn);
+  // The bucket width is the ONLY interpolated value and it is built from an
+  // integer we computed — user text never reaches the SQL string.
+  const bucketSeconds = Math.max(1, Math.ceil((end - start) / 1000 / maxPoints));
+  if (!Number.isSafeInteger(bucketSeconds)) throw new Error('invalid time range');
+  const { rows } = await pool.query(
+    `SELECT topic, time_bucket('${bucketSeconds} seconds'::interval, ts) AS bucket, avg(value) AS value
+     FROM ${table}
+     WHERE topic = ANY($1) AND ts BETWEEN $2 AND $3 AND value IS NOT NULL
+     GROUP BY topic, bucket
+     ORDER BY bucket`,
+    [tags, new Date(start), new Date(end)]
+  );
+  const byTag = new Map(tags.map((t) => [t, []]));
+  for (const row of rows) {
+    if (!byTag.has(row.topic)) continue;
+    const ts = row.bucket instanceof Date ? row.bucket.getTime() : Date.parse(row.bucket);
+    const value = Number(row.value);
+    if (Number.isFinite(ts) && Number.isFinite(value)) byTag.get(row.topic).push([ts, value]);
+  }
+  return { series: tags.map((tag) => ({ tag, points: byTag.get(tag) })) };
+}
+
+const TIMEBASE_TAGS_ERROR = 'tag listing not supported for timebase — enter the tag path directly';
+const TIMEBASE_QUERY_ERROR = 'trend read-back not supported for timebase — use the Timebase Explorer to view this data';
+
+const TAG_QUERY_BACKENDS = {
+  influxdb: influxQueryTags,
+  timescaledb: timescaleQueryTags,
+  timebase: () => {
+    throw new Error(TIMEBASE_TAGS_ERROR);
+  }
+};
+
+const SERIES_QUERY_BACKENDS = {
+  influxdb: influxQuerySeries,
+  timescaledb: timescaleQuerySeries,
+  timebase: () => {
+    throw new Error(TIMEBASE_QUERY_ERROR);
+  }
+};
+
+/** List distinct topic/tag names stored in a historian. */
+async function queryTags(conn = {}, { search = '', limit = 100 } = {}, fetchImpl = globalThis.fetch) {
+  const backend = TAG_QUERY_BACKENDS[conn.type];
+  if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
+  const lim = Math.min(1000, Math.max(1, Math.round(Number(limit) || 100)));
+  return backend(conn, { search: String(search), limit: lim }, fetchImpl);
+}
+
+/** Read downsampled series for up to 10 tags over a time range. */
+async function querySeries(conn = {}, { tags = [], start, end, maxPoints = 1000 } = {}, fetchImpl = globalThis.fetch) {
+  const backend = SERIES_QUERY_BACKENDS[conn.type];
+  if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
+  if (!Array.isArray(tags) || tags.length < 1 || tags.length > 10 || tags.some((t) => typeof t !== 'string' || !t.trim())) {
+    throw new Error('tags must be an array of 1-10 non-empty strings');
+  }
+  const range = normalizeRange({ start, end, maxPoints });
+  return backend(conn, { tags, ...range }, fetchImpl);
+}
+
 /** Close pooled Postgres connections (shutdown). */
 async function closePools() {
   for (const { pool } of pgPools.values()) await pool.end().catch(() => {});
@@ -233,4 +448,4 @@ function publicConfig(conn) {
   return { ...rest, hasSecret: Boolean(token || apiKey || apiSecret || password) };
 }
 
-module.exports = { writePoints, supportedTypes, publicConfig, toLineProtocol, closePools, DEFAULT_TIMEBASE_PATH };
+module.exports = { writePoints, queryTags, querySeries, supportedTypes, publicConfig, toLineProtocol, closePools, DEFAULT_TIMEBASE_PATH };

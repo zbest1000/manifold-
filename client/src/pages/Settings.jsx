@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Palette, Terminal, Info, Check, BellRing, Trash2, Plus, FileDown, FileUp, ScrollText } from 'lucide-react';
+import { Palette, Terminal, Info, Check, BellRing, Trash2, Plus, Pencil, FileDown, FileUp, ScrollText } from 'lucide-react';
 import clsx from 'clsx';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
@@ -222,8 +222,37 @@ function AuditCard() {
 const RULE_LABEL = {
   'branch-silent': 'Branch silent',
   'topic-silent': 'Topic silent',
-  'new-topic': 'New topic appears'
+  'new-topic': 'New topic appears',
+  'value-threshold': 'Value threshold'
 };
+
+const VALUE_OPS = ['>', '>=', '<', '<=', '==', '!='];
+
+const EMPTY_RULE_FORM = {
+  id: null,
+  type: 'branch-silent',
+  brokerId: '',
+  path: '',
+  topic: '',
+  prefix: '',
+  thresholdSec: 60,
+  field: '',
+  op: '>',
+  value: '',
+  sustainSec: '',
+  clearValue: '',
+  webhookUrl: '',
+  name: ''
+};
+
+// Compact one-line definition of a value rule for the rule list,
+// e.g. "plant/+/temp · v > 80 for 30s, clear at 75".
+function valueRuleSummary(r) {
+  let s = ` · ${r.topic} · ${r.field || 'value'} ${r.op} ${r.value}`;
+  if (r.sustainMs > 0) s += ` for ${Math.round(r.sustainMs / 1000)}s`;
+  if (r.clearValue !== null && r.clearValue !== undefined) s += `, clear at ${r.clearValue}`;
+  return s;
+}
 
 // Alert rules: watch the namespace actively — a branch going quiet, a specific
 // topic dying, or unexpected topics appearing. Rules are evaluated server-side
@@ -233,7 +262,7 @@ function AlertRulesCard() {
   const brokers = useStore((s) => s.brokers);
   const [rules, setRules] = useState([]);
   const [events, setEvents] = useState([]);
-  const [form, setForm] = useState({ type: 'branch-silent', brokerId: '', path: '', topic: '', prefix: '', thresholdSec: 60, webhookUrl: '', name: '' });
+  const [form, setForm] = useState(EMPTY_RULE_FORM);
   const [busy, setBusy] = useState(false);
   const connected = brokers.filter((b) => b.status === 'connected');
 
@@ -247,11 +276,12 @@ function AlertRulesCard() {
     return () => clearInterval(t);
   }, []);
 
-  const add = async (e) => {
+  const save = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.saveAlertRule({
+      const body = {
+        id: form.id || undefined, // keeping the id makes POST an upsert (edit)
         name: form.name || null,
         type: form.type,
         brokerId: form.brokerId || connected[0]?.id,
@@ -260,8 +290,16 @@ function AlertRulesCard() {
         prefix: form.prefix,
         thresholdMs: Number(form.thresholdSec) * 1000,
         webhookUrl: form.webhookUrl || null
-      });
-      setForm((f) => ({ ...f, path: '', topic: '', prefix: '', name: '' }));
+      };
+      if (form.type === 'value-threshold') {
+        body.field = form.field || null;
+        body.op = form.op;
+        body.value = Number(form.value);
+        body.sustainMs = form.sustainSec === '' ? 0 : Number(form.sustainSec) * 1000;
+        body.clearValue = form.clearValue === '' ? null : Number(form.clearValue);
+      }
+      await api.saveAlertRule(body);
+      setForm((f) => ({ ...EMPTY_RULE_FORM, type: f.type, brokerId: f.brokerId, thresholdSec: f.thresholdSec }));
       load();
     } catch {
       // pushLog captured it
@@ -270,9 +308,30 @@ function AlertRulesCard() {
     }
   };
 
+  // Load any existing rule (all types) back into the form for editing.
+  const edit = (r) => {
+    setForm({
+      id: r.id,
+      type: r.type,
+      brokerId: r.brokerId || '',
+      path: r.path || '',
+      topic: r.topic || '',
+      prefix: r.prefix || '',
+      thresholdSec: Math.round((r.thresholdMs || 60_000) / 1000),
+      field: r.field || '',
+      op: r.op || '>',
+      value: r.value ?? '',
+      sustainSec: r.sustainMs > 0 ? Math.round(r.sustainMs / 1000) : '',
+      clearValue: r.clearValue ?? '',
+      webhookUrl: r.webhookUrl || '',
+      name: r.name || ''
+    });
+  };
+
   const remove = async (id) => {
     try {
       await api.deleteAlertRule(id);
+      if (form.id === id) setForm(EMPTY_RULE_FORM);
       load();
     } catch {
       // pushLog captured it
@@ -294,7 +353,13 @@ function AlertRulesCard() {
       {rules.length > 0 && (
         <div className="mb-4 space-y-1.5">
           {rules.map((r) => (
-            <div key={r.id} className="flex items-center justify-between gap-2 rounded-lg bg-black/20 px-3 py-2 text-xs">
+            <div
+              key={r.id}
+              className={clsx(
+                'flex items-center justify-between gap-2 rounded-lg bg-black/20 px-3 py-2 text-xs',
+                form.id === r.id && 'ring-1 ring-accent-500/50'
+              )}
+            >
               <span className="min-w-0">
                 <span className="font-medium text-slate-200">{r.name || RULE_LABEL[r.type]}</span>
                 <span className="ml-2 text-slate-500">
@@ -302,18 +367,24 @@ function AlertRulesCard() {
                   {r.type === 'branch-silent' && ` · ${r.path || '(whole namespace)'} > ${Math.round(r.thresholdMs / 1000)}s`}
                   {r.type === 'topic-silent' && ` · ${r.topic} > ${Math.round(r.thresholdMs / 1000)}s`}
                   {r.type === 'new-topic' && (r.prefix ? ` · under ${r.prefix}` : ' · anywhere')}
+                  {r.type === 'value-threshold' && valueRuleSummary(r)}
                   {r.webhookUrl && ' · webhook'}
                 </span>
               </span>
-              <button aria-label="Delete rule" onClick={() => remove(r.id)} className="shrink-0 rounded p-1 text-slate-500 hover:bg-white/10 hover:text-red-400">
-                <Trash2 size={13} />
-              </button>
+              <span className="flex shrink-0 items-center">
+                <button aria-label="Edit rule" onClick={() => edit(r)} className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-accent-400">
+                  <Pencil size={13} />
+                </button>
+                <button aria-label="Delete rule" onClick={() => remove(r.id)} className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-red-400">
+                  <Trash2 size={13} />
+                </button>
+              </span>
             </div>
           ))}
         </div>
       )}
 
-      <form onSubmit={add} className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <form onSubmit={save} className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Field label="Type">
           <select
             value={form.type}
@@ -323,6 +394,7 @@ function AlertRulesCard() {
             <option value="branch-silent">Branch silent</option>
             <option value="topic-silent">Topic silent</option>
             <option value="new-topic">New topic appears</option>
+            <option value="value-threshold">Value threshold</option>
           </select>
         </Field>
         <Field label="Broker">
@@ -354,18 +426,63 @@ function AlertRulesCard() {
             <Input placeholder="plant/" value={form.prefix} onChange={(e) => setForm((f) => ({ ...f, prefix: e.target.value }))} />
           </Field>
         )}
-        {form.type !== 'new-topic' && (
+        {(form.type === 'branch-silent' || form.type === 'topic-silent') && (
           <Field label="Threshold (s)">
             <Input type="number" min="5" value={form.thresholdSec} onChange={(e) => setForm((f) => ({ ...f, thresholdSec: e.target.value }))} />
           </Field>
         )}
+        {form.type === 'value-threshold' && (
+          <>
+            <Field label="Topic (exact or +/# filter)">
+              <Input placeholder="plant/+/temp" value={form.topic} onChange={(e) => setForm((f) => ({ ...f, topic: e.target.value }))} required />
+            </Field>
+            <Field label="Field (optional dot-path)">
+              <Input placeholder="v or data.temp (empty = payload)" value={form.field} onChange={(e) => setForm((f) => ({ ...f, field: e.target.value }))} />
+            </Field>
+            <Field label="Operator">
+              <select
+                value={form.op}
+                onChange={(e) => setForm((f) => ({ ...f, op: e.target.value }))}
+                className="w-full rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-slate-200"
+              >
+                {VALUE_OPS.map((op) => (
+                  <option key={op} value={op}>
+                    {op}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Value">
+              <Input type="number" step="any" placeholder="80" value={form.value} onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))} required />
+            </Field>
+            <Field label="Sustain (s, optional)">
+              <Input type="number" min="0" step="any" placeholder="0 = immediate" value={form.sustainSec} onChange={(e) => setForm((f) => ({ ...f, sustainSec: e.target.value }))} />
+            </Field>
+            <Field label="Clear value (optional)">
+              <Input type="number" step="any" placeholder="hysteresis clear level" value={form.clearValue} onChange={(e) => setForm((f) => ({ ...f, clearValue: e.target.value }))} />
+            </Field>
+          </>
+        )}
         <Field label="Webhook URL (optional)" className="col-span-2">
           <Input placeholder="https://hooks.example.com/…" value={form.webhookUrl} onChange={(e) => setForm((f) => ({ ...f, webhookUrl: e.target.value }))} />
         </Field>
-        <div className="flex items-end">
+        <div className="flex items-end gap-2">
           <Button type="submit" disabled={busy || connected.length === 0}>
-            <Plus size={14} className="mr-1" /> Add rule
+            {form.id ? (
+              <>
+                <Check size={14} className="mr-1" /> Save rule
+              </>
+            ) : (
+              <>
+                <Plus size={14} className="mr-1" /> Add rule
+              </>
+            )}
           </Button>
+          {form.id && (
+            <Button type="button" variant="ghost" onClick={() => setForm(EMPTY_RULE_FORM)}>
+              Cancel
+            </Button>
+          )}
         </div>
       </form>
 

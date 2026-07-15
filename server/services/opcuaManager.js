@@ -275,6 +275,23 @@ class OpcuaManager extends EventEmitter {
     return { connectionId, nodeId, status: 'stopped' };
   }
 
+  /**
+   * Update a saved endpoint in place: validate first (a bad body must not kill
+   * a live session), close the existing session if any, then connect again
+   * under the SAME id. disconnect() sets `closing` on the OLD entry only —
+   * connect() builds a fresh entry, so the update never ends up stuck in a
+   * terminal state. Like a POST-created connection, it starts with no monitors.
+   */
+  async updateConnection(connectionId, config = {}) {
+    if (!config.endpointUrl) {
+      throw new Error('endpointUrl is required (e.g. opc.tcp://host:4840)');
+    }
+    if (this.connections.has(connectionId)) {
+      await this.disconnect(connectionId);
+    }
+    return this.connect({ ...config, id: connectionId });
+  }
+
   async disconnect(connectionId) {
     const entry = this.connections.get(connectionId);
     if (!entry) {

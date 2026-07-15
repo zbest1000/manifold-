@@ -13,6 +13,13 @@
  * - `topic-silent`: same, for one exact topic.
  * - `new-topic`: fires once per new topic appearing under `prefix` (watermark
  *   over the store's topic-added event ring; not stateful).
+ * - `value-threshold`: fires when a numeric payload value (optionally a
+ *   dot-path `field` into a JSON payload) crosses `value` per `op`. Evaluated
+ *   on the manager's live message tap (not the 15s poll) so alerts land at
+ *   message latency. Supports `sustainMs` (condition must hold continuously
+ *   before firing) and `clearValue` hysteresis (for '>' rules, resolve only
+ *   once the value falls back to <= clearValue — no flapping in the deadband).
+ *   `topic` may be exact or an MQTT filter with +/#.
  *
  * Every firing is emitted on the socket (`alert`), kept in a bounded history
  * ring (GET /api/alerts/events), and optionally POSTed to the rule's
@@ -20,11 +27,44 @@
  * must never break evaluation).
  */
 
+const { matchParts, compiledView } = require('./mqttMatch');
+
 const EVAL_MS = 15_000;
 const HISTORY_MAX = 500;
 const WEBHOOK_TIMEOUT_MS = 5_000;
 
-const RULE_TYPES = ['branch-silent', 'topic-silent', 'new-topic'];
+const RULE_TYPES = ['branch-silent', 'topic-silent', 'new-topic', 'value-threshold'];
+
+const VALUE_OPS = ['>', '>=', '<', '<=', '==', '!='];
+const OPS = {
+  '>': (a, b) => a > b,
+  '>=': (a, b) => a >= b,
+  '<': (a, b) => a < b,
+  '<=': (a, b) => a <= b,
+  '==': (a, b) => a === b,
+  '!=': (a, b) => a !== b
+};
+
+/**
+ * Pull the numeric value a value-threshold rule watches out of a tapped
+ * message payload. `fieldParts` is the pre-split dot-path (null = the payload
+ * itself). Returns a finite number or null (null = "not our kind of message",
+ * never an error — namespaces mix types on the same branch all the time).
+ */
+function extractValue(payload, fieldParts) {
+  let v = payload;
+  if (fieldParts) {
+    for (const seg of fieldParts) {
+      if (v === null || typeof v !== 'object') return null;
+      v = v[seg];
+    }
+  }
+  // Reject non-scalar shapes and JS coercion traps (Number('') === 0,
+  // Number(true) === 1, Number([5]) === 5) — only real numbers alert.
+  if (typeof v === 'object' || typeof v === 'boolean' || v === '' || v === undefined || v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 class AlertEngine {
   constructor({ io, profiles, mqttManager, fetchImpl = globalThis.fetch, intervalMs = EVAL_MS }) {
@@ -38,9 +78,31 @@ class AlertEngine {
     this.timer = null;
     this.webhookFailures = 0;
     this.lastWebhookError = null;
+    this.tapping = false;
+    this.onMessage = this.onMessage.bind(this);
+    // Compiled value-rule table (filters and field paths pre-split, disabled
+    // rules excluded), rebuilt only when the profile store's revision changes —
+    // same pattern as the pipeline engine, so the steady-state per-message
+    // cost is an integer compare plus array walks.
+    this.valueTable = profiles
+      ? compiledView(profiles, () =>
+          (profiles.alertRules() || [])
+            .filter((r) => r.type === 'value-threshold' && r.enabled !== false && r.brokerId && r.topic && OPS[r.op])
+            .map((r) => ({
+              rule: r,
+              parts: String(r.topic).split('/'),
+              fieldParts: r.field ? String(r.field).split('.') : null
+            }))
+        )
+      : () => [];
   }
 
   start() {
+    // Value rules ride the live message tap; silence rules keep the interval.
+    if (!this.tapping && this.manager?.on) {
+      this.manager.on('message', this.onMessage);
+      this.tapping = true;
+    }
     if (this.timer) return;
     this.timer = setInterval(() => this.evaluate(), this.intervalMs);
     this.timer.unref?.();
@@ -49,6 +111,10 @@ class AlertEngine {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+    if (this.tapping) {
+      this.manager?.off?.('message', this.onMessage);
+      this.tapping = false;
+    }
   }
 
   /** One evaluation pass over all rules. Exposed for tests. */
@@ -72,7 +138,7 @@ class AlertEngine {
   _ruleState(rule) {
     let s = this.state.get(rule.id);
     if (!s) {
-      s = { firing: false, since: 0, armed: false, watermark: 0 };
+      s = { firing: false, since: 0, armed: false, watermark: 0, breachedSince: 0, lastValue: null };
       this.state.set(rule.id, s);
     }
     return s;
@@ -132,6 +198,90 @@ class AlertEngine {
     }
   }
 
+  /**
+   * Live-tap handler for value-threshold rules. Hot path: nothing allocates
+   * until a rule's broker matches (topic split is lazy and reuses the
+   * manager's pre-split parts when present), and the rule table is compiled.
+   * `now` is injectable for deterministic sustain tests.
+   */
+  onMessage(msg, now = Date.now()) {
+    const table = this.valueTable();
+    if (!table.length) return;
+    let topicParts = null;
+    for (const entry of table) {
+      if (entry.rule.brokerId !== msg.brokerId) continue;
+      if (!topicParts) topicParts = msg.topicParts || msg.topic.split('/');
+      if (!matchParts(entry.parts, topicParts)) continue;
+      try {
+        this._evalValue(entry, msg, now);
+      } catch (error) {
+        console.warn(`alertEngine: rule ${entry.rule.id} (${entry.rule.name || entry.rule.type}): ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Value-threshold state machine, per rule:
+   *
+   *   ok --breach--> breached (breachedSince set)
+   *   breached --held for sustainMs--> FIRING (emit 'firing')
+   *   breached --condition drops--> ok (sustain clock resets)
+   *   FIRING --clear condition--> ok (emit 'resolved')
+   *   FIRING --in hysteresis deadband--> FIRING (no flap, no re-emit)
+   *
+   * With sustainMs = 0 the breached state fires on the first breaching
+   * message. The clear condition defaults to "op no longer true"; with
+   * clearValue set, '>'/'>=' rules resolve only at value <= clearValue and
+   * '<'/'<=' rules only at value >= clearValue.
+   */
+  _evalValue(entry, msg, now) {
+    const rule = entry.rule;
+    const v = extractValue(msg.payload, entry.fieldParts);
+    if (v === null) return; // non-numeric payload/field — not ours to judge
+    const s = this._ruleState(rule);
+    s.lastValue = v;
+    const limit = Number(rule.value);
+    const sustainMs = Number(rule.sustainMs) > 0 ? Number(rule.sustainMs) : 0;
+    const breached = OPS[rule.op](v, limit);
+    const label = rule.field || 'value';
+
+    if (breached) {
+      if (!s.breachedSince) s.breachedSince = now;
+      if (!s.firing && now - s.breachedSince >= sustainMs) {
+        s.firing = true;
+        s.since = now;
+        this._emit(rule, 'firing', {
+          topic: msg.topic,
+          value: v,
+          detail:
+            `${label} = ${v} (${rule.op} ${limit}` +
+            (sustainMs ? `, sustained ${Math.round(sustainMs / 1000)}s` : '') +
+            `) on ${msg.topic}`
+        });
+      }
+    } else {
+      s.breachedSince = 0; // sustain clock only counts continuous breach
+      if (s.firing && this._isCleared(rule, v)) {
+        s.firing = false;
+        this._emit(rule, 'resolved', {
+          topic: msg.topic,
+          value: v,
+          detail: `${label} = ${v} back within limit on ${msg.topic}`
+        });
+      }
+    }
+  }
+
+  /** Hysteresis clear check — see the _evalValue state machine notes. */
+  _isCleared(rule, v) {
+    if (rule.clearValue === null || rule.clearValue === undefined || rule.clearValue === '') return true;
+    const clear = Number(rule.clearValue);
+    if (!Number.isFinite(clear)) return true;
+    if (rule.op === '>' || rule.op === '>=') return v <= clear;
+    if (rule.op === '<' || rule.op === '<=') return v >= clear;
+    return true; // ==/!= have no meaningful deadband
+  }
+
   _emit(rule, status, extra = {}) {
     const evt = {
       ruleId: rule.id,
@@ -167,4 +317,4 @@ class AlertEngine {
   }
 }
 
-module.exports = { AlertEngine, RULE_TYPES };
+module.exports = { AlertEngine, RULE_TYPES, VALUE_OPS };

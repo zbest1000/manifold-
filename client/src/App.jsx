@@ -8,6 +8,7 @@ import Uns from './pages/Uns';
 // Route-level code splitting: only the core explore surfaces (Overview,
 // Topics, UNS) ship in the main bundle; everything else loads on first visit.
 const Flows = lazy(() => import('./pages/Flows'));
+const Trends = lazy(() => import('./pages/Trends'));
 const Pipelines = lazy(() => import('./pages/Pipelines'));
 const Tags = lazy(() => import('./pages/Tags'));
 const Brokers = lazy(() => import('./pages/Brokers'));
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="topics" element={<TopicGraph />} />
         <Route path="uns" element={<Uns />} />
         <Route path="flows" element={<S><Flows /></S>} />
+        <Route path="trends" element={<S><Trends /></S>} />
         <Route path="pipelines" element={<S><Pipelines /></S>} />
         <Route path="tags" element={<S><Tags /></S>} />
         <Route path="brokers" element={<S><Brokers /></S>} />
