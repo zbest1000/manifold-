@@ -1,6 +1,6 @@
 const mqtt = require('mqtt');
 const { EventEmitter } = require('events');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const SparkplugDecoder = require('./sparkplugDecoder');
 const SparkplugRegistry = require('./sparkplugRegistry');
 const TopicStore = require('./topicStore');

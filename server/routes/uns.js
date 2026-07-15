@@ -1,5 +1,5 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const router = express.Router();
 
 // UNS mounts: external sources (OPC UA connections, the i3X namespace) grafted

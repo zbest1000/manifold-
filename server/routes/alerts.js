@@ -1,5 +1,5 @@
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 const { RULE_TYPES, VALUE_OPS } = require('../services/alertEngine');
 const router = express.Router();
 
