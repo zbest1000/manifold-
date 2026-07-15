@@ -1,20 +1,12 @@
-<div align="center">
+# 🏭 Manifold
 
-# Manifold
+**One live map of your industrial data** — MQTT · Sparkplug B · OPC UA · CESMII SMIP · i3X, explored, unified, and shaped into a Unified Namespace.
 
-**One live map of your industrial data.**
+[![CI](https://github.com/zbest1000/manifold/actions/workflows/ci.yml/badge.svg)](https://github.com/zbest1000/manifold/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/zbest1000/manifold/blob/main/README.md#license) [![Node](https://img.shields.io/badge/node-%E2%89%A5%2020-brightgreen.svg)](https://nodejs.org)
 
-MQTT · Sparkplug B · OPC UA · CESMII SMIP · i3X — explored, unified, and shaped into a Unified Namespace.
+![Live UNS topology](images/uns-topology.png)
 
-[![CI](https://github.com/zbest1000/manifold/actions/workflows/ci.yml/badge.svg)](https://github.com/zbest1000/manifold/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/zbest1000/manifold/blob/main/README.md#license)
-[![Node](https://img.shields.io/badge/node-%E2%89%A5%2020-brightgreen.svg)](https://nodejs.org)
-
-<img src="images/uns-topology.png" alt="Live UNS topology" width="850">
-
-*The live ISA-95 topology — built entirely from observed traffic, values on leaves, rates on branches, publishing edges animated.*
-
-</div>
+> *The live ISA-95 topology — built entirely from observed traffic: values on leaves, message rates on branches, publishing edges animated.*
 
 ---
 

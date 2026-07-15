@@ -7,11 +7,9 @@ Historians are configured under **Pipelines → Historians**. Pipelines and the
 recorder never write to a database directly: everything passes through a
 **store-and-forward outbox**.
 
-<div align="center">
-<img src="images/historians.png" alt="Historians tab with store-and-forward status" width="850">
+![Historians tab with store-and-forward status](images/historians.png)
 
-*Each historian card shows its live store-and-forward state: written, queued, spilled, dropped.*
-</div>
+> *Each historian card shows its live store-and-forward state: written, queued, spilled, dropped.*
 
 ## How store-and-forward protects your data
 
