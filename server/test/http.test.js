@@ -159,6 +159,81 @@ test('PUT /api/mqtt/brokers/:id validates like POST and updates the profile in p
   await fetch(`${baseUrl}/api/mqtt/brokers/${id}`, { method: 'DELETE' });
 });
 
+test('POST /api/mqtt/brokers validates transport/session fields', async () => {
+  // ws/wss have no standard MQTT port — an explicit one is required.
+  const noPort = await post('/api/mqtt/brokers', { host: 'localhost', protocol: 'ws' });
+  assert.strictEqual(noPort.status, 400);
+  assert.match(noPort.body.error, /port is required/);
+
+  const badPath = await post('/api/mqtt/brokers', { host: 'localhost', protocol: 'ws', port: 8083, wsPath: 'mqtt' });
+  assert.strictEqual(badPath.status, 400);
+  assert.match(badPath.body.error, /wsPath/);
+
+  const badProtocol = await post('/api/mqtt/brokers', { host: 'localhost', protocol: 'http' });
+  assert.strictEqual(badProtocol.status, 400);
+  assert.match(badProtocol.body.error, /protocol must be one of/);
+
+  const badVersion = await post('/api/mqtt/brokers', { host: 'localhost', mqttVersion: 3 });
+  assert.strictEqual(badVersion.status, 400);
+  assert.match(badVersion.body.error, /mqttVersion must be 4 or 5/);
+
+  const badFilter = await post('/api/mqtt/brokers', { host: 'localhost', subscribeFilter: '' });
+  assert.strictEqual(badFilter.status, 400);
+  assert.match(badFilter.body.error, /subscribeFilter/);
+
+  // PUT validates the same fields (and must not tear down anything on 400).
+  const created = await post('/api/mqtt/brokers', { name: 'v-test', host: '127.0.0.1', port: 59997, reconnect: false });
+  assert.strictEqual(created.status, 202);
+  const id = created.body.brokerId;
+  const badPut = await put(`/api/mqtt/brokers/${id}`, { host: '127.0.0.1', protocol: 'wss' });
+  assert.strictEqual(badPut.status, 400);
+  assert.match(badPut.body.error, /port is required/);
+  assert.ok((await get(`/api/mqtt/brokers/${id}`)).status === 200, 'broker must survive a rejected update');
+  await fetch(`${baseUrl}/api/mqtt/brokers/${id}`, { method: 'DELETE' });
+});
+
+test('ws broker config round-trips wsPath/mqttVersion/subscribeFilter through the info object', async () => {
+  // A closed local port is enough — the WebSocket never connects, but the
+  // manager registers the connection with its full info object.
+  const created = await post('/api/mqtt/brokers', {
+    name: 'ws-test', host: '127.0.0.1', port: 59996, protocol: 'ws',
+    wsPath: '/mqtt-ws', mqttVersion: 5, subscribeFilter: '$share/g1/#', reconnect: false
+  });
+  assert.strictEqual(created.status, 202);
+  const id = created.body.brokerId;
+  const { status, body } = await get(`/api/mqtt/brokers/${id}`);
+  assert.strictEqual(status, 200);
+  assert.strictEqual(body.broker.protocol, 'ws');
+  assert.strictEqual(body.broker.wsPath, '/mqtt-ws');
+  assert.strictEqual(body.broker.mqttVersion, 5);
+  assert.strictEqual(body.broker.subscribeFilter, '$share/g1/#');
+  // Non-ws brokers must not carry a wsPath in the serialized info.
+  const plain = await post('/api/mqtt/brokers', { host: '127.0.0.1', port: 59995, reconnect: false });
+  const plainInfo = await get(`/api/mqtt/brokers/${plain.body.brokerId}`);
+  assert.ok(!('wsPath' in plainInfo.body.broker));
+  assert.strictEqual(plainInfo.body.broker.mqttVersion, 4);
+  assert.strictEqual(plainInfo.body.broker.subscribeFilter, '#');
+  await fetch(`${baseUrl}/api/mqtt/brokers/${id}`, { method: 'DELETE' });
+  await fetch(`${baseUrl}/api/mqtt/brokers/${plain.body.brokerId}`, { method: 'DELETE' });
+});
+
+test('POST /publish validates MQTT 5 properties shape before anything else', async () => {
+  const badUser = await post('/api/mqtt/brokers/nope/publish', {
+    topic: 't',
+    properties: { userProperties: { a: 1 } }
+  });
+  assert.strictEqual(badUser.status, 400);
+  assert.match(badUser.body.error, /userProperties/);
+
+  const badShape = await post('/api/mqtt/brokers/nope/publish', { topic: 't', properties: 'nope' });
+  assert.strictEqual(badShape.status, 400);
+  assert.match(badShape.body.error, /properties must be an object/);
+
+  const badContentType = await post('/api/mqtt/brokers/nope/publish', { topic: 't', properties: { contentType: 5 } });
+  assert.strictEqual(badContentType.status, 400);
+  assert.match(badContentType.body.error, /contentType/);
+});
+
 test('POST /subscriptions/resolve validates filters and 404s unknown brokers', async () => {
   const r404 = await post('/api/mqtt/brokers/nope/subscriptions/resolve', { filters: ['#'] });
   assert.strictEqual(r404.status, 404);

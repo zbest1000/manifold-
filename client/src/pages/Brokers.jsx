@@ -12,6 +12,8 @@ const BLANK = {
   host: 'localhost',
   port: 1883,
   protocol: 'mqtt',
+  wsPath: '/mqtt',
+  mqttVersion: 4,
   username: '',
   password: '',
   // Connection config (advanced)
@@ -23,6 +25,7 @@ const BLANK = {
   maxReconnect: 0,
   cleanSession: true,
   autoSubscribe: true,
+  subscribeFilter: '#',
   subscribeQos: 1,
   rejectUnauthorized: true
 };
@@ -36,11 +39,15 @@ export default function Brokers() {
   const [editingId, setEditingId] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const isWs = form.protocol === 'ws' || form.protocol === 'wss';
+
   const buildConfig = () => ({
     name: form.name || undefined,
     host: form.host,
     port: Number(form.port),
     protocol: form.protocol,
+    wsPath: isWs ? form.wsPath || '/mqtt' : undefined,
+    mqttVersion: Number(form.mqttVersion) || 4,
     username: form.username || undefined,
     // Blank while editing = keep the stored password (never echoed back).
     password: form.password || undefined,
@@ -52,6 +59,7 @@ export default function Brokers() {
     maxReconnect: Number(form.maxReconnect) || 0,
     cleanSession: form.cleanSession,
     autoSubscribe: form.autoSubscribe,
+    subscribeFilter: form.subscribeFilter || '#',
     subscribeQos: Number(form.subscribeQos),
     rejectUnauthorized: form.rejectUnauthorized
   });
@@ -64,6 +72,7 @@ export default function Brokers() {
 
   const save = async () => {
     if (!form.host) return toast.error('Host is required');
+    if (isWs && !Number(form.port)) return toast.error('Port is required for WebSocket connections');
     setBusy(true);
     try {
       if (editingId) {
@@ -90,10 +99,13 @@ export default function Brokers() {
       host: b.host,
       port: b.port,
       protocol: b.protocol,
+      wsPath: b.wsPath || '/mqtt',
+      mqttVersion: b.mqttVersion ?? 4,
       username: b.username || '',
       password: '',
       clientId: b.clientId || '',
       autoSubscribe: b.autoSubscribe !== false,
+      subscribeFilter: b.subscribeFilter || '#',
       subscribeQos: b.subscribeQos ?? 1,
       maxReconnect: b.maxReconnect || 0
     });
@@ -132,18 +144,46 @@ export default function Brokers() {
               <Field label="Protocol">
                 <select
                   value={form.protocol}
-                  onChange={(e) => setForm({ ...form, protocol: e.target.value, port: e.target.value === 'mqtts' ? 8883 : 1883 })}
+                  onChange={(e) => {
+                    const protocol = e.target.value;
+                    // No standard WebSocket MQTT port (EMQX 8083/8084, Mosquitto
+                    // 9001, proxies 443…) — leave it blank for an explicit choice.
+                    const port = protocol === 'mqtts' ? 8883 : protocol === 'mqtt' ? 1883 : '';
+                    setForm({ ...form, protocol, port });
+                  }}
                   className="w-full rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-100 focus:border-accent-500/60 focus:outline-none"
                 >
                   <option value="mqtt">mqtt (TCP)</option>
                   <option value="mqtts">mqtts (TLS)</option>
+                  <option value="ws">ws (WebSocket)</option>
+                  <option value="wss">wss (WebSocket TLS)</option>
                 </select>
               </Field>
               <Field label="Host">
                 <Input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="broker.example.com" />
               </Field>
               <Field label="Port">
-                <Input type="number" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} />
+                <Input
+                  type="number"
+                  value={form.port}
+                  onChange={(e) => setForm({ ...form, port: e.target.value })}
+                  placeholder={isWs ? 'required — e.g. 8083' : undefined}
+                />
+              </Field>
+              {isWs && (
+                <Field label="WebSocket path">
+                  <Input value={form.wsPath} onChange={(e) => setForm({ ...form, wsPath: e.target.value })} placeholder="/mqtt" />
+                </Field>
+              )}
+              <Field label="MQTT version">
+                <select
+                  value={form.mqttVersion}
+                  onChange={(e) => setForm({ ...form, mqttVersion: Number(e.target.value) })}
+                  className="w-full rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-100 focus:border-accent-500/60 focus:outline-none"
+                >
+                  <option value={4}>MQTT 3.1.1 (v4)</option>
+                  <option value={5}>MQTT 5</option>
+                </select>
               </Field>
               <Field label="Username (optional)">
                 <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
@@ -190,6 +230,17 @@ export default function Brokers() {
                     onChange={(e) => setForm({ ...form, reconnectPeriod: e.target.value })}
                   />
                 </Field>
+                <Field label="Subscription filter (intake)">
+                  <Input
+                    value={form.subscribeFilter}
+                    onChange={(e) => setForm({ ...form, subscribeFilter: e.target.value })}
+                    placeholder="#"
+                  />
+                  <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                    Topic filter auto-subscribed on connect. Use <span className="mono">$share/&lt;group&gt;/#</span> for
+                    load-balanced intake across instances — messages still arrive on their real topics.
+                  </p>
+                </Field>
                 <Field label="Subscribe QoS (intake durability)">
                   <select
                     value={form.subscribeQos}
@@ -217,8 +268,12 @@ export default function Brokers() {
                 <div className="flex flex-col justify-center gap-2.5">
                   <Check label="Auto-reconnect" checked={form.reconnect} onChange={(v) => setForm({ ...form, reconnect: v })} />
                   <Check label="Clean session" checked={form.cleanSession} onChange={(v) => setForm({ ...form, cleanSession: v })} />
-                  <Check label="Auto-subscribe to #" checked={form.autoSubscribe} onChange={(v) => setForm({ ...form, autoSubscribe: v })} />
-                  {form.protocol === 'mqtts' && (
+                  <Check
+                    label={`Auto-subscribe to ${form.subscribeFilter || '#'}`}
+                    checked={form.autoSubscribe}
+                    onChange={(v) => setForm({ ...form, autoSubscribe: v })}
+                  />
+                  {(form.protocol === 'mqtts' || form.protocol === 'wss') && (
                     <Check
                       label="Verify TLS certificate"
                       checked={form.rejectUnauthorized}

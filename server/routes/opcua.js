@@ -7,6 +7,62 @@ router.get('/connections', (req, res) => {
   res.json({ connections: opcuaManager.getConnections() });
 });
 
+// POST /api/opcua/discover { endpointUrl } — connect with security None, list
+// the server's endpoints (mode/policy/securityLevel + server certificate),
+// disconnect. Bounded to ~10s inside the manager.
+router.post('/discover', async (req, res) => {
+  const { opcuaManager } = req.app.locals.services;
+  const { endpointUrl } = req.body || {};
+  if (!endpointUrl || typeof endpointUrl !== 'string') {
+    return res.status(400).json({ error: 'endpointUrl is required (e.g. opc.tcp://host:4840)' });
+  }
+  try {
+    const endpoints = await opcuaManager.discoverEndpoints(endpointUrl);
+    res.json({ endpointUrl, endpoints });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// GET /api/opcua/certificate — the Manifold application certificate (PEM +
+// thumbprint/subject/validity), created on first use in <dataDir>/pki.
+router.get('/certificate', async (req, res) => {
+  const { opcuaManager } = req.app.locals.services;
+  try {
+    res.json(await opcuaManager.getApplicationCertificate());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/opcua/trust — trusted + rejected server certificates in the PKI store
+router.get('/trust', async (req, res) => {
+  const { opcuaManager } = req.app.locals.services;
+  try {
+    res.json(await opcuaManager.listTrust());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/opcua/trust { thumbprint } — promote a rejected certificate to trusted
+router.post('/trust', async (req, res) => {
+  const { opcuaManager } = req.app.locals.services;
+  const { thumbprint } = req.body || {};
+  if (!thumbprint || typeof thumbprint !== 'string') {
+    return res.status(400).json({ error: 'thumbprint is required (SHA1 hex, see GET /api/opcua/trust)' });
+  }
+  try {
+    const certificate = await opcuaManager.trustCertificate(thumbprint);
+    if (!certificate) {
+      return res.status(404).json({ error: `no rejected certificate with thumbprint ${thumbprint}` });
+    }
+    res.json({ status: 'trusted', certificate });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // POST /api/opcua/connections — connect to an endpoint (profile persisted)
 router.post('/connections', async (req, res) => {
   const { opcuaManager, profiles } = req.app.locals.services;

@@ -208,5 +208,14 @@ export const api = {
   updateBroker: (id, config) =>
     request(`/api/mqtt/brokers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) }),
   updateOpcuaConnection: (id, config) =>
-    request(`/api/opcua/connections/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) })
+    request(`/api/opcua/connections/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) }),
+
+  // Sparkplug host application STATE (Manifold as primary host)
+  sparkplugState: (body) => request('/api/tags/sparkplug/state', { method: 'POST', body: JSON.stringify(body) }),
+
+  // OPC UA security (endpoint discovery + PKI trust management)
+  opcuaDiscover: (endpointUrl) => request('/api/opcua/discover', { method: 'POST', body: JSON.stringify({ endpointUrl }) }),
+  opcuaCertificate: () => request('/api/opcua/certificate'),
+  opcuaTrustList: () => request('/api/opcua/trust'),
+  opcuaTrust: (thumbprint) => request('/api/opcua/trust', { method: 'POST', body: JSON.stringify({ thumbprint }) })
 };

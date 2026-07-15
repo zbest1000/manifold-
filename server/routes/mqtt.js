@@ -1,6 +1,58 @@
 const express = require('express');
 const router = express.Router();
 
+const BROKER_PROTOCOLS = ['mqtt', 'mqtts', 'ws', 'wss'];
+
+// Shared POST/PUT body validation for the transport/session fields. The
+// manager re-validates on connect, but PUT tears the running client down
+// before reconnecting — rejecting bad bodies here means an invalid update can
+// never drop a healthy connection.
+function validateBrokerConfig(body) {
+  if (body.protocol !== undefined && !BROKER_PROTOCOLS.includes(body.protocol)) {
+    return `protocol must be one of ${BROKER_PROTOCOLS.join(', ')}`;
+  }
+  // No standard MQTT-over-WebSocket port exists (EMQX 8083/8084, Mosquitto
+  // 9001, proxies 443...), so ws/wss require an explicit one.
+  if ((body.protocol === 'ws' || body.protocol === 'wss') && !Number(body.port)) {
+    return `port is required for ${body.protocol} connections`;
+  }
+  if (body.wsPath !== undefined && (typeof body.wsPath !== 'string' || !body.wsPath.startsWith('/'))) {
+    return "wsPath must be a string starting with '/'";
+  }
+  if (body.mqttVersion !== undefined && ![4, 5].includes(Number(body.mqttVersion))) {
+    return 'mqttVersion must be 4 or 5';
+  }
+  if (body.subscribeFilter !== undefined && (typeof body.subscribeFilter !== 'string' || body.subscribeFilter.length === 0)) {
+    return 'subscribeFilter must be a non-empty topic filter';
+  }
+  return null;
+}
+
+// MQTT 5 publish properties: { userProperties?: {k: v strings}, contentType?,
+// responseTopic? }. Forwarded to the broker only on v5 sessions (the manager
+// silently drops them for v4, where mqtt.js would error).
+function validatePublishProperties(properties) {
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) {
+    return 'properties must be an object';
+  }
+  const { userProperties, contentType, responseTopic } = properties;
+  if (userProperties !== undefined) {
+    if (typeof userProperties !== 'object' || userProperties === null || Array.isArray(userProperties)) {
+      return 'properties.userProperties must be a flat string-to-string object';
+    }
+    for (const value of Object.values(userProperties)) {
+      if (typeof value !== 'string') return 'properties.userProperties must be a flat string-to-string object';
+    }
+  }
+  if (contentType !== undefined && typeof contentType !== 'string') {
+    return 'properties.contentType must be a string';
+  }
+  if (responseTopic !== undefined && typeof responseTopic !== 'string') {
+    return 'properties.responseTopic must be a string';
+  }
+  return null;
+}
+
 // GET /api/mqtt/brokers — list connections
 router.get('/brokers', (req, res) => {
   const { mqttManager } = req.app.locals.services;
@@ -10,6 +62,8 @@ router.get('/brokers', (req, res) => {
 // POST /api/mqtt/brokers — connect to a broker (profile persisted for restart)
 router.post('/brokers', (req, res) => {
   const { mqttManager, profiles } = req.app.locals.services;
+  const invalid = validateBrokerConfig(req.body || {});
+  if (invalid) return res.status(400).json({ error: invalid });
   try {
     const result = mqttManager.connectToBroker(req.body || {});
     profiles?.upsertBroker(result.brokerId, { ...(req.body || {}), id: result.brokerId });
@@ -36,6 +90,8 @@ router.put('/brokers/:brokerId', (req, res) => {
   if (body.password === undefined && saved?.config?.password !== undefined) {
     body.password = saved.config.password;
   }
+  const invalid = validateBrokerConfig(body);
+  if (invalid) return res.status(400).json({ error: invalid });
   try {
     const result = mqttManager.updateBroker(brokerId, body);
     profiles?.upsertBroker(brokerId, { ...body, id: brokerId });
@@ -286,13 +342,17 @@ router.post('/brokers/:brokerId/unsubscribe', (req, res) => {
   }
 });
 
-// POST /api/mqtt/brokers/:brokerId/publish { topic, payload, qos, retain }
+// POST /api/mqtt/brokers/:brokerId/publish { topic, payload, qos, retain, properties }
 router.post('/brokers/:brokerId/publish', async (req, res) => {
   const { mqttManager } = req.app.locals.services;
-  const { topic, payload, qos, retain } = req.body || {};
+  const { topic, payload, qos, retain, properties } = req.body || {};
   if (!topic) return res.status(400).json({ error: 'topic is required' });
+  if (properties !== undefined) {
+    const invalid = validatePublishProperties(properties);
+    if (invalid) return res.status(400).json({ error: invalid });
+  }
   try {
-    const result = await mqttManager.publish(req.params.brokerId, topic, payload ?? '', { qos, retain });
+    const result = await mqttManager.publish(req.params.brokerId, topic, payload ?? '', { qos, retain, properties });
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });

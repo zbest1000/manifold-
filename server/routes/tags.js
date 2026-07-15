@@ -152,6 +152,31 @@ router.post('/bindings', async (req, res) => {
   res.status(201).json(saved);
 });
 
+// ---- Sparkplug host application STATE -----------------------------------------
+
+// POST /api/tags/sparkplug/state { brokerId, hostId, enabled } — start/stop a
+// host-application session (retained spBv1.0/STATE/{hostId} with will + birth).
+router.post('/sparkplug/state', async (req, res) => {
+  const { profiles, sparkplugPublisher } = req.app.locals.services;
+  const { brokerId, hostId, enabled } = req.body || {};
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be a boolean' });
+  }
+  if (typeof hostId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(hostId)) {
+    return res.status(400).json({ error: 'hostId must match [A-Za-z0-9_-]{1,64}' });
+  }
+  if (!profiles.brokers().some((b) => b.config?.id === brokerId)) {
+    return res.status(400).json({ error: `broker ${brokerId} has no saved profile (needed for a dedicated host connection)` });
+  }
+  try {
+    if (enabled) sparkplugPublisher.startHost({ brokerId, hostId });
+    else await sparkplugPublisher.stopHost(brokerId, hostId);
+    res.json({ sparkplug: sparkplugPublisher.getStatus() });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
 // DELETE /api/bindings/:id
 router.delete('/bindings/:id', (req, res) => {
   const { profiles } = req.app.locals.services;

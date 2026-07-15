@@ -20,6 +20,7 @@ const MAX_EVENTS = 2000;
 class SparkplugRegistry {
   constructor() {
     this.groups = new Map(); // groupId -> { id, edgeNodes: Map }
+    this.hosts = new Map(); // hostId -> { id, online, timestamp, lastSeen, msgCount }
     this.lastUpdate = 0;
     this.events = []; // bounded ring of BIRTH/DEATH lifecycle events
   }
@@ -56,14 +57,64 @@ class SparkplugRegistry {
     return d;
   }
 
+  _host(id) {
+    let h = this.hosts.get(id);
+    if (!h) {
+      // online starts null (unknown) so the very first STATE message counts as
+      // a transition and emits exactly one lifecycle event.
+      h = { id, online: null, timestamp: null, lastSeen: null, msgCount: 0 };
+      this.hosts.set(id, h);
+    }
+    return h;
+  }
+
+  /**
+   * Fold a spBv1.0/STATE/{host} message. Sparkplug 3.0 STATE is JSON
+   * `{ online, timestamp }`; legacy 2.x is plain text 'ONLINE'/'OFFLINE'.
+   * Unknown shapes mark the host as seen but leave its online state alone.
+   * STATE is retained (every new subscriber replays it), so lifecycle events
+   * are pushed only on actual transitions.
+   */
+  _hostState(hostId, payload, ts) {
+    const host = this._host(hostId);
+    host.lastSeen = ts;
+    host.msgCount++;
+
+    let online = null;
+    let timestamp = null;
+    const raw = Buffer.isBuffer(payload) ? payload.toString('utf8') : payload;
+    if (raw && typeof raw === 'object' && typeof raw.online === 'boolean') {
+      online = raw.online;
+      if (Number.isFinite(Number(raw.timestamp))) timestamp = Number(raw.timestamp);
+    } else if (typeof raw === 'string') {
+      const text = raw.trim().toUpperCase();
+      if (text === 'ONLINE') online = true;
+      else if (text === 'OFFLINE') online = false;
+    }
+    if (online === null) return; // unrecognized payload — seen, state unchanged
+
+    if (timestamp !== null) host.timestamp = timestamp;
+    if (host.online !== online) {
+      host.online = online;
+      this._event({ type: online ? 'host-online' : 'host-offline', host: hostId, ts });
+    }
+  }
+
   /**
    * Fold one Sparkplug message into the topology. `decoded` is the decoded
    * payload (may be null if decode failed — identity/state come from the topic).
+   * `payload` is the raw (JSON-parsed or string) payload, used for STATE
+   * messages, which are not protobuf.
    */
-  update(topic, decoded, ts = Date.now()) {
+  update(topic, decoded, ts = Date.now(), payload = null) {
     const info = SparkplugDecoder.parseSparkplugTopic(topic);
     if (!info) return;
     this.lastUpdate = ts;
+
+    if (info.messageType === 'STATE') {
+      this._hostState(info.hostId, payload, ts);
+      return;
+    }
 
     const group = this._group(info.groupId);
     const edge = this._edge(group, info.edgeNodeId);
@@ -157,12 +208,24 @@ class SparkplugRegistry {
       }
       groups.push({ id: g.id, edgeNodes });
     }
+    const hosts = [];
+    for (const h of this.hosts.values()) {
+      hosts.push({
+        id: h.id,
+        online: h.online,
+        timestamp: h.timestamp,
+        lastSeen: h.lastSeen,
+        msgCount: h.msgCount
+      });
+    }
     return {
       groups,
+      hosts,
       summary: {
         groups: groups.length,
         edgeNodes: edgeCount,
         devices: deviceCount,
+        hosts: hosts.length,
         online: onlineCount,
         lastUpdate: this.lastUpdate
       }
@@ -170,7 +233,7 @@ class SparkplugRegistry {
   }
 
   isEmpty() {
-    return this.groups.size === 0;
+    return this.groups.size === 0 && this.hosts.size === 0;
   }
 }
 

@@ -404,8 +404,27 @@ class SparkplugDecoder {
   // Static method to parse Sparkplug topic structure
   static parseSparkplugTopic(topic) {
     const parts = topic.split('/');
-    
-    if (parts.length < 4 || parts[0] !== 'spBv1.0') {
+
+    if (parts[0] !== 'spBv1.0') {
+      return null;
+    }
+
+    // Host application state: spBv1.0/STATE/{host_id} (Sparkplug 3.0 §STATE).
+    // The host id is a single segment — anything deeper is not a valid STATE topic.
+    if (parts[1] === 'STATE') {
+      if (parts.length !== 3 || !parts[2]) return null;
+      return {
+        namespace: parts[0],
+        groupId: null,
+        messageType: 'STATE',
+        messageTypeDescription: 'Host Application State',
+        edgeNodeId: null,
+        deviceId: null,
+        hostId: parts[2]
+      };
+    }
+
+    if (parts.length < 4) {
       return null;
     }
 

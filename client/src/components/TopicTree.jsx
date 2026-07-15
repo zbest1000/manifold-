@@ -79,6 +79,16 @@ export default function TopicTree({ topics, selectedTopic, onSelect, filter = ''
   const end = Math.min(total, Math.ceil((scrollTop + viewH) / ROW_H) + OVERSCAN);
   const slice = rows.slice(start, end);
 
+  // MQTT 5 properties of the selected topic's latest message (v5 sessions
+  // only). Memoized on selection/topic-set changes so scrolling never rescans.
+  const selectedProps = useMemo(() => {
+    if (!selectedTopic) return null;
+    for (const t of topics) {
+      if (t.topic === selectedTopic) return t.properties || null;
+    }
+    return null;
+  }, [topics, selectedTopic]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-1 border-b border-white/5 px-3 py-2 text-[11px] text-slate-500">
@@ -148,6 +158,32 @@ export default function TopicTree({ topics, selectedTopic, onSelect, filter = ''
           </div>
         )}
       </div>
+
+      {selectedProps && (
+        <div className="border-t border-white/5 px-3 py-2 text-[11px]">
+          <p className="mb-1 font-medium uppercase tracking-wide text-slate-500">MQTT 5 properties</p>
+          <div className="space-y-0.5">
+            {selectedProps.contentType && <PropRow name="contentType" value={selectedProps.contentType} />}
+            {selectedProps.responseTopic && <PropRow name="responseTopic" value={selectedProps.responseTopic} />}
+            {selectedProps.correlationData && <PropRow name="correlationData" value={selectedProps.correlationData} />}
+            {selectedProps.userProperties &&
+              Object.entries(selectedProps.userProperties).map(([k, v]) => (
+                <PropRow key={k} name={k} value={String(v)} />
+              ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PropRow({ name, value }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="shrink-0 text-slate-500">{name}</span>
+      <span className="mono min-w-0 truncate text-slate-300" title={value}>
+        {value}
+      </span>
     </div>
   );
 }

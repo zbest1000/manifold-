@@ -156,6 +156,12 @@ export default function Tags() {
               })}
             </div>
           </div>
+
+          <HostStatePanel
+            brokers={brokers}
+            hosts={bindings.sparkplug?.hosts || {}}
+            onStatus={(sparkplug) => setBindings((prev) => ({ ...prev, sparkplug }))}
+          />
         </aside>
       </div>
 
@@ -198,6 +204,86 @@ export default function Tags() {
             setWizardOpen(true);
           }}
         />
+      )}
+    </div>
+  );
+}
+
+// ---- Sparkplug host application STATE ----------------------------------------
+
+// Manifold as a Sparkplug primary host: a dedicated session publishing retained
+// { online, timestamp } on spBv1.0/STATE/{hostId} with a matching will.
+function HostStatePanel({ brokers, hosts, onStatus }) {
+  const [brokerId, setBrokerId] = useState('');
+  const [hostId, setHostId] = useState('manifold_host');
+  const [busy, setBusy] = useState(false);
+  const active = Object.values(hosts);
+
+  const toggle = async (bId, hId, enabled) => {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(hId)) {
+      toast.error('Host ID must be 1-64 chars: letters, digits, _ or -');
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await api.sparkplugState({ brokerId: bId, hostId: hId, enabled });
+      onStatus(r.sparkplug);
+      toast.success(enabled ? `Host STATE online: ${hId}` : `Host STATE stopped: ${hId}`);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Primary host STATE</h3>
+      <p className="mb-2 text-[11px] leading-snug text-slate-500">
+        Publish retained <span className="font-mono">spBv1.0/STATE/&lt;host&gt;</span> so edge nodes see Manifold as a
+        Sparkplug host application (will announces offline).
+      </p>
+      <div className="space-y-1.5">
+        <select
+          value={brokerId || brokers[0]?.id || ''}
+          onChange={(e) => setBrokerId(e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-surface-900 px-2 py-1.5 text-xs text-slate-200"
+        >
+          {brokers.length === 0 && <option value="">no connected brokers</option>}
+          {brokers.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
+        <div className="flex gap-1.5">
+          <Input value={hostId} onChange={(e) => setHostId(e.target.value)} placeholder="host id" />
+          <Button
+            size="sm"
+            disabled={busy || !hostId || brokers.length === 0}
+            onClick={() => toggle(brokerId || brokers[0]?.id, hostId, true)}
+          >
+            Enable
+          </Button>
+        </div>
+      </div>
+      {active.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {active.map((h) => (
+            <div key={`${h.brokerId} ${h.hostId}`} className="flex items-center justify-between gap-2 rounded-lg bg-black/20 px-2.5 py-1.5">
+              <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
+                <span className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', h.online ? 'bg-emerald-400' : 'bg-amber-400')} />
+                <span className="min-w-0 truncate font-mono text-slate-200" title={`spBv1.0/STATE/${h.hostId}`}>{h.hostId}</span>
+                <span className="shrink-0 text-slate-500">{h.online ? 'online' : 'connecting'}</span>
+              </span>
+              <button
+                disabled={busy}
+                onClick={() => toggle(h.brokerId, h.hostId, false)}
+                className="shrink-0 text-[11px] text-slate-500 hover:text-rose-300"
+              >
+                disable
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

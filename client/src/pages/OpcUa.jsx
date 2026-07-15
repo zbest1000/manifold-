@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil } from 'lucide-react';
+import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil, Radar, ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
@@ -20,6 +20,26 @@ import ViewTab from '@/components/ViewTab';
 
 const ROOT = 'ns=0;i=84';
 
+const BLANK_FORM = {
+  name: '',
+  endpointUrl: 'opc.tcp://localhost:4840',
+  securityMode: 'None',
+  securityPolicy: 'None',
+  username: '',
+  password: '',
+  trustServer: false
+};
+
+const SECURITY_MODES = ['None', 'Sign', 'SignAndEncrypt'];
+// Only the policies node-opcua actually supports for client connections.
+const SECURITY_POLICIES = ['None', 'Basic256Sha256', 'Aes128_Sha256_RsaOaep', 'Aes256_Sha256_RsaPss'];
+
+// Keep a discovered value selectable even when it's outside our curated list.
+const withCurrent = (options, current) => (options.includes(current) ? options : [...options, current]);
+
+const selectClass =
+  'w-full rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-100 focus:border-accent-500/60 focus:outline-none';
+
 export default function OpcUa() {
   const opcua = useStore((s) => s.opcua);
   const opcuaValues = useStore((s) => s.opcuaValues);
@@ -35,8 +55,10 @@ export default function OpcUa() {
   const [expanded, setExpanded] = useState(new Map()); // nodeId -> references
   const [selected, setSelected] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', endpointUrl: 'opc.tcp://localhost:4840' });
+  const [form, setForm] = useState({ ...BLANK_FORM });
   const [editingId, setEditingId] = useState(null);
+  const [endpoints, setEndpoints] = useState(null); // discovered endpoint list
+  const [discovering, setDiscovering] = useState(false);
   const [busy, setBusy] = useState(false);
   const [matchIds, setMatchIds] = useState(null);
   const [view, setView] = useState('graph');
@@ -87,7 +109,8 @@ export default function OpcUa() {
       toast.success(editingId ? 'Connection updated' : 'Connected to OPC UA server');
       setShowForm(false);
       setEditingId(null);
-      setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' });
+      setForm({ ...BLANK_FORM });
+      setEndpoints(null);
       setConnectionId(res.connectionId);
       const list = await api.listOpcua();
       setOpcua(list.connections);
@@ -99,10 +122,34 @@ export default function OpcUa() {
   };
 
   // Load the selected connection's config into the connect form for editing.
+  // Password is never echoed back — leaving it blank keeps the stored one.
   const edit = (c) => {
-    setForm({ name: c.name || '', endpointUrl: c.endpointUrl });
+    setForm({
+      ...BLANK_FORM,
+      name: c.name || '',
+      endpointUrl: c.endpointUrl,
+      securityMode: c.securityMode || 'None',
+      securityPolicy: c.securityPolicy || 'None',
+      username: c.username || ''
+    });
     setEditingId(c.id);
+    setEndpoints(null);
     setShowForm(true);
+  };
+
+  const discover = async () => {
+    if (!form.endpointUrl) return toast.error('Endpoint URL is required');
+    setDiscovering(true);
+    setEndpoints(null);
+    try {
+      const res = await api.opcuaDiscover(form.endpointUrl);
+      setEndpoints(res.endpoints || []);
+      if (!res.endpoints?.length) toast('The server reported no endpoints');
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setDiscovering(false);
+    }
   };
 
   const expandNode = async (node) => {
@@ -191,7 +238,7 @@ export default function OpcUa() {
             )}
             <Button
               variant="outline"
-              onClick={() => { setEditingId(null); setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' }); setShowForm((v) => !v); }}
+              onClick={() => { setEditingId(null); setForm({ ...BLANK_FORM }); setEndpoints(null); setShowForm((v) => !v); }}
             >
               <Plus size={15} /> Connect
             </Button>
@@ -200,17 +247,102 @@ export default function OpcUa() {
       />
 
       {showForm && (
-        <Card className="mx-6 mt-4 p-5">
+        <Card className="mx-6 mt-4 max-h-[70vh] overflow-y-auto p-5">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Name">
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="PLC gateway" />
             </Field>
             <Field label="Endpoint URL">
-              <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} />
+              <div className="flex gap-2">
+                <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} />
+                <Button variant="outline" onClick={discover} disabled={discovering || !form.endpointUrl} title="List the server's endpoints and their security settings">
+                  <Radar size={14} /> {discovering ? 'Discovering…' : 'Discover'}
+                </Button>
+              </div>
+            </Field>
+            <Field label="Security mode">
+              <select
+                value={form.securityMode}
+                onChange={(e) => setForm({ ...form, securityMode: e.target.value })}
+                className={selectClass}
+              >
+                {withCurrent(SECURITY_MODES, form.securityMode).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Security policy">
+              <select
+                value={form.securityPolicy}
+                onChange={(e) => setForm({ ...form, securityPolicy: e.target.value })}
+                className={selectClass}
+              >
+                {withCurrent(SECURITY_POLICIES, form.securityPolicy).map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Username (optional)">
+              <Input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="off" placeholder="anonymous" />
+            </Field>
+            <Field label="Password">
+              <Input
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                autoComplete="new-password"
+                placeholder={editingId ? 'unchanged' : ''}
+              />
             </Field>
           </div>
+
+          {endpoints && (
+            <div className="mt-4 space-y-1.5">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Discovered endpoints</p>
+              {endpoints.length === 0 ? (
+                <p className="text-xs text-slate-500">The server reported no endpoints.</p>
+              ) : (
+                endpoints.map((ep, i) => {
+                  const active = form.securityMode === ep.securityMode && form.securityPolicy === ep.securityPolicy;
+                  return (
+                    <button
+                      key={`${ep.securityMode}-${ep.securityPolicy}-${i}`}
+                      onClick={() => setForm({ ...form, securityMode: ep.securityMode, securityPolicy: ep.securityPolicy })}
+                      className={clsx(
+                        'flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-xs transition-colors',
+                        active
+                          ? 'border-accent-500/50 bg-accent-500/10 text-slate-100'
+                          : 'border-white/10 bg-surface-950/40 text-slate-300 hover:border-white/20 hover:bg-white/5'
+                      )}
+                    >
+                      <span className="mono truncate">{ep.securityMode} · {ep.securityPolicy}</span>
+                      <span className="flex shrink-0 items-center gap-2 text-slate-500">
+                        {ep.serverCertificate?.thumbprint && (
+                          <span className="mono hidden sm:inline">{ep.serverCertificate.thumbprint.slice(0, 12)}…</span>
+                        )}
+                        <Badge>level {ep.securityLevel}</Badge>
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          <label className="mt-4 flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={form.trustServer}
+              onChange={(e) => setForm({ ...form, trustServer: e.target.checked })}
+              className="h-4 w-4 accent-accent-500"
+            />
+            Trust server certificate on first connect
+          </label>
+
+          <CertificatesSection />
+
           <div className="mt-4 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); setForm({ name: '', endpointUrl: 'opc.tcp://localhost:4840' }); }}>
+            <Button variant="ghost" onClick={() => { setShowForm(false); setEditingId(null); setForm({ ...BLANK_FORM }); setEndpoints(null); }}>
               Cancel
             </Button>
             <Button onClick={connect} disabled={busy}>
@@ -293,6 +425,121 @@ export default function OpcUa() {
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsible PKI panel for the connect form: shows Manifold's application
+ * certificate (to hand to server admins) and lets the user promote rejected
+ * server certificates to trusted after a failed secure connect.
+ */
+function CertificatesSection() {
+  const [open, setOpen] = useState(false);
+  const [cert, setCert] = useState(null);
+  const [trust, setTrust] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [c, t] = await Promise.all([api.opcuaCertificate(), api.opcuaTrustList()]);
+      setCert(c);
+      setTrust(t);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && !cert && !loading) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const trustOne = async (thumbprint) => {
+    try {
+      await api.opcuaTrust(thumbprint);
+      toast.success('Server certificate trusted');
+      load();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+
+  const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
+
+  return (
+    <div className="mt-4 border-t border-white/5 pt-3">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-400 hover:text-slate-200"
+      >
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <ShieldCheck size={13} /> Certificates
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3 text-xs">
+          {loading && !cert ? (
+            <p className="text-slate-500">Loading certificates…</p>
+          ) : (
+            <>
+              {cert && (
+                <div className="rounded-xl border border-white/10 bg-surface-950/40 p-3">
+                  <p className="mb-1 font-semibold uppercase tracking-wide text-slate-400">Application certificate</p>
+                  <p className="break-all text-slate-300">{cert.subject || cert.applicationUri}</p>
+                  <p className="mt-1 text-slate-500">
+                    Valid {fmtDate(cert.validFrom)} – {fmtDate(cert.validTo)}
+                  </p>
+                  <p className="mono mt-1 break-all text-slate-500">SHA1 {cert.thumbprint}</p>
+                </div>
+              )}
+
+              <div>
+                <p className="mb-1.5 font-semibold uppercase tracking-wide text-slate-400">
+                  Rejected server certificates
+                </p>
+                {!trust?.rejected?.length ? (
+                  <p className="text-slate-500">None — servers you reject (or that fail trust checks) appear here.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {trust.rejected.map((c) => (
+                      <div
+                        key={c.thumbprint}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-surface-950/40 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-slate-300">{c.subject || c.file}</p>
+                          <p className="mono truncate text-slate-500">{c.thumbprint}</p>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => trustOne(c.thumbprint)}>
+                          <ShieldCheck size={13} /> Trust
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {trust?.trusted?.length > 0 && (
+                <div>
+                  <p className="mb-1.5 font-semibold uppercase tracking-wide text-slate-400">Trusted server certificates</p>
+                  <div className="space-y-1">
+                    {trust.trusted.map((c) => (
+                      <p key={c.thumbprint} className="truncate text-slate-500">
+                        <span className="text-slate-300">{c.subject || c.file}</span>
+                        <span className="mono"> · {c.thumbprint.slice(0, 16)}…</span>
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -21,6 +21,24 @@ const GLOBAL_RECENT = 5000; // recent messages kept across all topics, per broke
 const FLUSH_MS = 100; // coalesce + forward on this cadence
 const FORWARD_CAP = 5000; // max topics forwarded per flush (sample beyond this)
 
+const PROTOCOLS = ['mqtt', 'mqtts', 'ws', 'wss'];
+
+// The MQTT 5 per-message properties worth surfacing to the explorer. Returns
+// null when none are present so the caller attaches nothing (and the topic's
+// stale entry is cleared instead).
+function pickPacketProperties(p) {
+  const out = {};
+  if (p.userProperties) out.userProperties = p.userProperties;
+  if (p.contentType) out.contentType = p.contentType;
+  if (p.responseTopic) out.responseTopic = p.responseTopic;
+  if (p.correlationData !== undefined) {
+    out.correlationData = Buffer.isBuffer(p.correlationData)
+      ? p.correlationData.toString('base64')
+      : String(p.correlationData);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 class MqttManager extends EventEmitter {
   constructor(io) {
     super();
@@ -33,6 +51,7 @@ class MqttManager extends EventEmitter {
     this.tries = new Map(); // brokerId -> { trie, indexedThrough } (lazy; built on first resolve)
     this.sys = new Map(); // brokerId -> Set($SYS topic) — keeps /sys reads O(sys), not O(topics)
     this.recent = new Map(); // brokerId -> recent message ring (bounded)
+    this.msgProps = new Map(); // brokerId -> Map(topic -> latest MQTT 5 props) — only touched when packets carry properties
     this.topicMeta = new Map(); // brokerId -> Array(slot -> {type, spark}) — a topic's classification never changes
     this.rowCache = new Map(); // brokerId -> Map(slot -> { count, row }) — read-path decode cache
     this.msgSeq = 0; // fast monotonic id (avoids uuid per message on the hot path)
@@ -59,10 +78,32 @@ class MqttManager extends EventEmitter {
       throw new Error(`Broker ${brokerId} is already connected`);
     }
 
-    const port = Number(config.port) || (config.protocol === 'mqtts' ? 8883 : 1883);
-    const protocol = config.protocol || (port === 8883 ? 'mqtts' : 'mqtt');
+    const protocol = config.protocol || (Number(config.port) === 8883 ? 'mqtts' : 'mqtt');
+    if (!PROTOCOLS.includes(protocol)) {
+      throw new Error(`protocol must be one of ${PROTOCOLS.join(', ')}`);
+    }
+    const isWebSocket = protocol === 'ws' || protocol === 'wss';
+    // No invented WebSocket port defaults — brokers disagree (EMQX 8083/8084,
+    // Mosquitto 9001, reverse proxies 443...), so ws/wss require an explicit
+    // port; the 1883/8883 defaults stay for mqtt/mqtts only.
+    if (isWebSocket && !Number(config.port)) {
+      throw new Error(`port is required for ${protocol} connections`);
+    }
+    const port = Number(config.port) || (protocol === 'mqtts' ? 8883 : 1883);
+    const wsPath = isWebSocket ? config.wsPath || '/mqtt' : undefined;
+    if (isWebSocket && !wsPath.startsWith('/')) {
+      throw new Error("wsPath must start with '/'");
+    }
+    const mqttVersion = config.mqttVersion === undefined ? 4 : Number(config.mqttVersion);
+    if (mqttVersion !== 4 && mqttVersion !== 5) {
+      throw new Error('mqttVersion must be 4 or 5');
+    }
+    const subscribeFilter = config.subscribeFilter === undefined ? '#' : config.subscribeFilter;
+    if (typeof subscribeFilter !== 'string' || subscribeFilter.length === 0) {
+      throw new Error('subscribeFilter must be a non-empty topic filter');
+    }
     const clientId = config.clientId || `manifold_${Date.now()}`;
-    const brokerUrl = `${protocol}://${config.host}:${port}`;
+    const brokerUrl = `${protocol}://${config.host}:${port}${isWebSocket ? wsPath : ''}`;
 
     const options = {
       clientId,
@@ -73,17 +114,19 @@ class MqttManager extends EventEmitter {
       rejectUnauthorized: config.rejectUnauthorized !== false
     };
 
+    if (mqttVersion === 5) options.protocolVersion = 5;
+
     if (config.username) {
       options.username = config.username;
       options.password = config.password || '';
     }
-    if (protocol === 'mqtts') {
+    if (protocol === 'mqtts' || protocol === 'wss') {
       if (config.ca) options.ca = config.ca;
       if (config.cert) options.cert = config.cert;
       if (config.key) options.key = config.key;
     }
 
-    const client = mqtt.connect(brokerUrl, options);
+    const client = this._mqttConnect(brokerUrl, options);
 
     const info = {
       id: brokerId,
@@ -91,9 +134,15 @@ class MqttManager extends EventEmitter {
       host: config.host,
       port,
       protocol,
+      wsPath, // undefined for mqtt/mqtts — dropped by JSON serialization
+      mqttVersion,
       clientId,
       username: config.username || null,
       autoSubscribe: config.autoSubscribe !== false,
+      // Intake filter: what autoSubscribe subscribes to on connect. Shared
+      // subscriptions ($share/<group>/<filter>) work too — messages still
+      // arrive on the real topic, so nothing downstream changes.
+      subscribeFilter,
       // Intake durability: QoS 0 subscriptions silently shed messages under
       // broker pressure — no pipeline can be more reliable than its intake, so
       // the explorer subscription defaults to QoS 1.
@@ -122,12 +171,19 @@ class MqttManager extends EventEmitter {
     this.sparkplug.set(brokerId, new SparkplugRegistry());
     this.sys.set(brokerId, new Set());
     this.recent.set(brokerId, []);
+    this.msgProps.set(brokerId, new Map());
     this.rowCache.set(brokerId, new Map());
     this.subscriptions.set(brokerId, new Set());
     this.setupClientEventHandlers(client, brokerId);
 
     this.io.emit('mqtt-connection-attempt', { brokerId, connection: this.publicInfo(info) });
     return { brokerId, status: 'connecting' };
+  }
+
+  // Seam over mqtt.connect (mqtt v5 exports non-configurable getters, so the
+  // module itself can't be stubbed) — tests intercept URL/options here.
+  _mqttConnect(url, options) {
+    return mqtt.connect(url, options);
   }
 
   setupClientEventHandlers(client, brokerId) {
@@ -141,7 +197,7 @@ class MqttManager extends EventEmitter {
       this.io.emit('mqtt-connected', { brokerId, connection: this.publicInfo(info) });
 
       if (info.autoSubscribe) {
-        this.subscribe(brokerId, '#', info.subscribeQos);
+        this.subscribe(brokerId, info.subscribeFilter, info.subscribeQos);
         // `#` does not match topics beginning with `$` (MQTT spec), so subscribe
         // to the broker's `$SYS` tree separately for audit/health stats. Brokers
         // that don't publish `$SYS` simply deliver nothing here ($SYS stays QoS 0
@@ -201,6 +257,17 @@ class MqttManager extends EventEmitter {
 
     store.ingest(topic, message, packet.qos, packet.retain);
     info.metrics.topicCount = store.topicCount();
+    // MQTT 5 per-message properties ride in a side map keyed by topic — one
+    // falsy branch per message keeps the v4 hot path allocation-free. A later
+    // publish without the surfaced keys clears the topic's stale entry.
+    if (packet.properties) {
+      const props = pickPacketProperties(packet.properties);
+      const map = this.msgProps.get(brokerId);
+      if (map) {
+        if (props) map.set(topic, props);
+        else map.delete(topic);
+      }
+    }
     // One char-code check per message; $SYS traffic is low-rate and tracking the
     // set here keeps the /sys endpoint O(|$SYS|) instead of scanning every topic.
     if (topic.charCodeAt(0) === 36 /* '$' */ && topic.startsWith('$SYS/')) {
@@ -254,12 +321,22 @@ class MqttManager extends EventEmitter {
       type: meta.type === 'json' || meta.type === 'text' ? (typeof payload === 'object' && payload !== null ? 'json' : 'text') : meta.type
     };
 
+    // MQTT 5 properties observed on the topic's latest publish (v5 sessions only).
+    const props = this.msgProps.get(brokerId)?.get(row.topic);
+    if (props) messageObj.properties = props;
+
     if (meta.spark) {
-      try {
-        messageObj.sparkplug = this.sparkplugDecoder.decode(message);
+      // STATE messages are plain JSON/text host-status certificates, not
+      // protobuf — decoding them as Sparkplug payloads would just flag noise.
+      if (/^spBv1\.0\/STATE\//.test(row.topic)) {
         messageObj.type = 'sparkplug';
-      } catch (error) {
-        messageObj.sparkplugError = error.message;
+      } else {
+        try {
+          messageObj.sparkplug = this.sparkplugDecoder.decode(message);
+          messageObj.type = 'sparkplug';
+        } catch (error) {
+          messageObj.sparkplugError = error.message;
+        }
       }
     }
     return messageObj;
@@ -293,7 +370,9 @@ class MqttManager extends EventEmitter {
       // Fold Sparkplug traffic into the device topology (identity from the topic,
       // metrics from the decoded payload). Reuses the decode already done above.
       if (registry && this.isSparkplugTopic(messageObj.topic)) {
-        registry.update(messageObj.topic, messageObj.sparkplug || null, row.ts);
+        // Raw payload rides along for STATE host certificates, whose
+        // online/offline verdict lives in the (non-protobuf) payload body.
+        registry.update(messageObj.topic, messageObj.sparkplug || null, row.ts, messageObj.payload);
       }
 
       // Message tap for the DataOps engines (pipelines, recorder, contracts,
@@ -380,8 +459,13 @@ class MqttManager extends EventEmitter {
     const info = this.connections.get(brokerId);
     const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
 
+    const opts = { qos: options.qos || 0, retain: options.retain || false };
+    // MQTT 5 publish properties only exist on v5 sessions — mqtt.js errors if
+    // they're sent over a v4 connection, so they're silently dropped there.
+    if (options.properties && info.mqttVersion === 5) opts.properties = options.properties;
+
     return new Promise((resolve, reject) => {
-      client.publish(topic, body, { qos: options.qos || 0, retain: options.retain || false }, (error) => {
+      client.publish(topic, body, opts, (error) => {
         if (error) {
           info.metrics.errors++;
           this.io.emit('publish-error', { brokerId, topic, error: error.message });
@@ -428,6 +512,7 @@ class MqttManager extends EventEmitter {
     this.tries.delete(brokerId);
     this.sys.delete(brokerId);
     this.recent.delete(brokerId);
+    this.msgProps.delete(brokerId);
     this.rowCache.delete(brokerId);
     this.subscriptions.delete(brokerId);
     this.io.emit('mqtt-disconnected', { brokerId });
@@ -522,7 +607,8 @@ class MqttManager extends EventEmitter {
         lastPayloadFormat: msg.payloadFormat,
         type: msg.type,
         retain: msg.retain,
-        payload: msg.payload
+        payload: msg.payload,
+        properties: msg.properties // MQTT 5 only; undefined otherwise (dropped by JSON)
       };
       cache?.set(row.slot, { count: row.count, obj });
       return obj;
@@ -817,6 +903,7 @@ class MqttManager extends EventEmitter {
     this.tries.clear();
     this.sys.clear();
     this.recent.clear();
+    this.msgProps.clear();
     this.rowCache.clear();
   }
 }

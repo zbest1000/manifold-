@@ -20,6 +20,12 @@ const { encodePayload } = require('./sparkplugEncoder');
  * The dedicated connection matters: the will payload must carry THIS session's
  * bdSeq, which the shared explorer connection can't provide.
  *
+ * Optionally, Manifold can also act as a Sparkplug HOST APPLICATION: a
+ * dedicated connection per (broker, host id) whose CONNECT carries a retained
+ * JSON will `{ online: false, timestamp }` on spBv1.0/STATE/{hostId}, and which
+ * publishes retained `{ online: true, timestamp }` on every (re)connect — per
+ * spec the reborn host must republish its STATE with a fresh timestamp.
+ *
  * Connection config comes from the profile store (the manager doesn't retain
  * broker passwords, profiles do).
  */
@@ -28,6 +34,7 @@ class SparkplugPublisher {
   constructor({ profiles }) {
     this.profiles = profiles;
     this.sessions = new Map(); // `${brokerId} ${group} ${edge}` -> session
+    this.hostSessions = new Map(); // `${brokerId} ${hostId}` -> host session
   }
 
   _brokerConfig(brokerId) {
@@ -170,16 +177,111 @@ class SparkplugPublisher {
     }
   }
 
+  // ---- host application STATE sessions -----------------------------------------
+
+  _stateTopic(hostId) {
+    return `spBv1.0/STATE/${hostId}`;
+  }
+
+  _publishState(h, online) {
+    const payload = JSON.stringify({ online, timestamp: Date.now() });
+    return new Promise((resolve) => {
+      h.client.publish(this._stateTopic(h.hostId), payload, { qos: 1, retain: true }, (error) => {
+        if (error) {
+          h.stats.errors++;
+          h.stats.lastError = error.message;
+        } else {
+          h.stats.published++;
+          h.stats.lastStateTs = Date.now();
+        }
+        resolve();
+      });
+    });
+  }
+
+  /** Start (or return) a host-application session for (brokerId, hostId). */
+  startHost({ brokerId, hostId }) {
+    const key = `${brokerId} ${hostId}`;
+    let h = this.hostSessions.get(key);
+    if (h) return h;
+
+    const cfg = this._brokerConfig(brokerId);
+    h = {
+      key,
+      brokerId,
+      hostId,
+      online: false,
+      stats: { published: 0, errors: 0, lastError: null, lastStateTs: null },
+      client: null
+    };
+
+    const url = `${cfg.protocol || 'mqtt'}://${cfg.host}:${Number(cfg.port) || 1883}`;
+    h.client = mqtt.connect(url, {
+      clientId: `manifold_host_${hostId}_${Date.now().toString(36)}`,
+      username: cfg.username || undefined,
+      password: cfg.password || undefined,
+      clean: true,
+      reconnectPeriod: 5000,
+      will: {
+        topic: this._stateTopic(hostId),
+        payload: JSON.stringify({ online: false, timestamp: Date.now() }),
+        qos: 1,
+        retain: true
+      }
+    });
+
+    // Fires on every (re)connect: the spec requires the reborn host to
+    // republish its online STATE with a fresh timestamp.
+    h.client.on('connect', () => {
+      h.online = true;
+      this._publishState(h, true);
+    });
+    h.client.on('error', (error) => {
+      h.stats.errors++;
+      h.stats.lastError = error.message;
+    });
+    h.client.on('close', () => {
+      h.online = false;
+    });
+
+    this.hostSessions.set(key, h);
+    return h;
+  }
+
+  /** Publish a clean retained offline STATE, then end the connection. */
+  async stopHost(brokerId, hostId) {
+    const key = `${brokerId} ${hostId}`;
+    const h = this.hostSessions.get(key);
+    if (!h) return false;
+    this.hostSessions.delete(key);
+    if (h.online) await this._publishState(h, false);
+    // Graceful end so the offline STATE flushes instead of the will firing.
+    await new Promise((resolve) => (h.client ? h.client.end(false, {}, resolve) : resolve()));
+    return true;
+  }
+
   getStatus() {
     const out = {};
     for (const [key, s] of this.sessions) {
       out[key] = { online: s.online, devices: s.devices.size, seq: s.seq, bdSeq: s.bdSeq, ...s.stats };
+    }
+    out.hosts = {};
+    for (const [key, h] of this.hostSessions) {
+      out.hosts[key] = { brokerId: h.brokerId, hostId: h.hostId, online: h.online, ...h.stats };
     }
     return out;
   }
 
   async stop() {
     const closing = [];
+    for (const [, h] of this.hostSessions) {
+      closing.push(
+        (h.online ? this._publishState(h, false) : Promise.resolve()).then(
+          () => new Promise((resolve) => (h.client ? h.client.end(false, {}, resolve) : resolve()))
+        )
+      );
+    }
+    this.hostSessions.clear();
     for (const s of this.sessions.values()) {
       if (s.online) {
         for (const deviceId of s.devices.keys()) {

@@ -1,4 +1,7 @@
 const { EventEmitter } = require('events');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const {
   OPCUAClient,
@@ -8,6 +11,10 @@ const {
   TimestampsToReturn,
   UserTokenType
 } = require('node-opcua-client');
+// node-opcua-client does not re-export the certificate manager — pull it (and
+// the cert parsing helpers) from the packages it is built on.
+const { OPCUACertificateManager, makeSubject } = require('node-opcua-certificate-manager');
+const { exploreCertificateInfo, makeSHA1Thumbprint, readCertificate } = require('node-opcua-crypto');
 
 const NODE_CLASS_NAMES = {
   0: 'Unspecified',
@@ -22,6 +29,117 @@ const NODE_CLASS_NAMES = {
 };
 
 const ROOT_NODE_ID = 'ns=0;i=84';
+
+const APPLICATION_NAME = 'Manifold';
+// Must match the URI baked into the application certificate — node-opcua's
+// certificate sanity check compares the two on every secure connect.
+const APPLICATION_URI = 'urn:manifold:client';
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
+// ---------------------------------------------------------------------------
+// Application PKI (lazily initialized, shared by every secure connection).
+// Rooted at <MANIFOLD_DATA_DIR|server/data>/pki with the standard node-opcua
+// layout: own/{certs,private}, trusted/certs, rejected/, issuers/...
+// Unknown server certificates are NOT auto-accepted; they land in rejected/
+// where the trust API (or a connect with trustServer:true) can promote them.
+// ---------------------------------------------------------------------------
+
+let certificateManagerPromise = null;
+
+function pkiRootFolder() {
+  return path.join(process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data'), 'pki');
+}
+
+function clientCertificateFile(certificateManager) {
+  // Same default path OPCUAClient derives when given a certificate manager.
+  return path.join(certificateManager.rootDir, 'own', 'certs', 'client_certificate.pem');
+}
+
+function getCertificateManager() {
+  if (!certificateManagerPromise) {
+    certificateManagerPromise = (async () => {
+      const certificateManager = new OPCUACertificateManager({
+        rootFolder: pkiRootFolder(),
+        automaticallyAcceptUnknownCertificate: false,
+        keySize: 2048 // fast to generate on first use, universally accepted
+      });
+      await certificateManager.initialize();
+      const certificateFile = clientCertificateFile(certificateManager);
+      if (!fs.existsSync(certificateFile)) {
+        const hostname = os.hostname();
+        await certificateManager.createSelfSignedCertificate({
+          applicationUri: APPLICATION_URI,
+          dns: [hostname],
+          outputFile: certificateFile,
+          subject: makeSubject(APPLICATION_NAME, hostname),
+          startDate: new Date(),
+          validity: 365 * 10
+        });
+      }
+      return certificateManager;
+    })();
+    // A failed init (e.g. unwritable data dir) must not poison every later
+    // call — drop the cached promise so the next caller retries.
+    certificateManagerPromise.catch(() => {
+      certificateManagerPromise = null;
+    });
+  }
+  return certificateManagerPromise;
+}
+
+function describeCertificate(der) {
+  const cert = { thumbprint: makeSHA1Thumbprint(der).toString('hex') };
+  try {
+    const info = exploreCertificateInfo(der);
+    cert.subject = formatSubject(info.subject);
+    cert.validFrom = info.notBefore || null;
+    cert.validTo = info.notAfter || null;
+  } catch {
+    // unparsable cert — the thumbprint is still enough to identify/trust it
+  }
+  return cert;
+}
+
+function formatSubject(subject) {
+  if (!subject) return null;
+  if (typeof subject === 'string') return subject;
+  const parts = Object.entries(subject)
+    .filter(([, v]) => typeof v === 'string' && v.length)
+    .map(([k, v]) => `${k}=${v}`);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function readCertificateFolder(folder) {
+  let files = [];
+  try {
+    files = fs.readdirSync(folder);
+  } catch {
+    return []; // folder not created yet == empty store
+  }
+  const out = [];
+  for (const file of files) {
+    if (!/\.(pem|der|crt|cer)$/i.test(file)) continue;
+    try {
+      out.push({ file, ...describeCertificate(readCertificate(path.join(folder, file))) });
+    } catch {
+      // skip files that are not certificates
+    }
+  }
+  return out;
+}
+
+// Translate node-opcua's security status codes into something actionable.
+function withTrustHint(error) {
+  const message = error?.message || String(error);
+  if (/BadSecurityChecksFailed|BadCertificateUntrusted|certificate\b.*\bnot trusted|untrusted/i.test(message)) {
+    return new Error(
+      'server certificate not trusted — retry with trustServer or trust it via the certificates API ' +
+        `(POST /api/opcua/trust). If the server rejected OUR certificate instead, trust the Manifold ` +
+        `client certificate (GET /api/opcua/certificate) on the server. [${message}]`
+    );
+  }
+  return error;
+}
 
 function toPlainValue(value) {
   if (value === null || value === undefined) return null;
@@ -52,14 +170,33 @@ class OpcuaManager extends EventEmitter {
       throw new Error(`OPC UA connection ${connectionId} already exists`);
     }
 
-    const client = OPCUAClient.create({
-      applicationName: 'Manifold',
+    const securityMode = MessageSecurityMode[config.securityMode] ?? MessageSecurityMode.None;
+    const securityPolicy = SecurityPolicy[config.securityPolicy] ?? SecurityPolicy.None;
+    const secure = securityMode !== MessageSecurityMode.None;
+
+    const clientOptions = {
+      applicationName: APPLICATION_NAME,
       endpointMustExist: false,
-      securityMode: MessageSecurityMode[config.securityMode] ?? MessageSecurityMode.None,
-      securityPolicy: SecurityPolicy[config.securityPolicy] ?? SecurityPolicy.None,
+      securityMode,
+      securityPolicy,
       connectionStrategy: { maxRetry: 2, initialDelay: 1000, maxDelay: 5000 },
       keepSessionAlive: true
-    });
+    };
+
+    // Security None keeps the historical fast path (no PKI requirement). Any
+    // signed/encrypted mode — or an explicit trustServer — runs through the
+    // shared application PKI so the client presents our certificate and
+    // verifies the server's against trusted/.
+    let certificateManager = null;
+    if (secure || config.trustServer === true) {
+      certificateManager = await getCertificateManager();
+      clientOptions.applicationUri = APPLICATION_URI;
+      clientOptions.clientCertificateManager = certificateManager;
+      clientOptions.certificateFile = clientCertificateFile(certificateManager);
+      clientOptions.privateKeyFile = certificateManager.privateKey;
+    }
+
+    const client = OPCUAClient.create(clientOptions);
 
     const info = {
       id: connectionId,
@@ -112,6 +249,17 @@ class OpcuaManager extends EventEmitter {
       }
     });
 
+    // trustServer: node-opcua's accept-unknown flag lives on the certificate
+    // manager (shared across connections), not on the connect call — so we
+    // toggle it for the duration of this connect and restore it in `finally`.
+    // The window is small; a concurrent secure connect during it would also
+    // be auto-accepted, which is an acceptable trade-off for this tool.
+    const toggleAutoAccept = certificateManager !== null && config.trustServer === true;
+    const previousAutoAccept = toggleAutoAccept
+      ? certificateManager.automaticallyAcceptUnknownCertificate
+      : null;
+    if (toggleAutoAccept) certificateManager.automaticallyAcceptUnknownCertificate = true;
+
     try {
       await client.connect(config.endpointUrl);
 
@@ -124,14 +272,127 @@ class OpcuaManager extends EventEmitter {
       info.connectedAt = new Date();
       this.io.emit('opcua-connected', { connectionId, connection: { ...info } });
       return { connectionId, status: 'connected', endpointUrl: config.endpointUrl };
-    } catch (error) {
+    } catch (rawError) {
+      const error = withTrustHint(rawError);
       info.status = 'error';
       info.lastError = error.message;
       this.io.emit('opcua-error', { connectionId, error: error.message });
       this.connections.delete(connectionId);
       await client.disconnect().catch(() => {});
       throw error;
+    } finally {
+      if (toggleAutoAccept) certificateManager.automaticallyAcceptUnknownCertificate = previousAutoAccept;
     }
+  }
+
+  /**
+   * Connect with security None, list the server's endpoints, disconnect.
+   * Bounded by DISCOVERY_TIMEOUT_MS (opc.tcp — the HTTP timeout helper does
+   * not apply here) so a black-holed host can't pin the request forever.
+   */
+  async discoverEndpoints(endpointUrl, timeoutMs = DISCOVERY_TIMEOUT_MS) {
+    if (!endpointUrl) {
+      throw new Error('endpointUrl is required (e.g. opc.tcp://host:4840)');
+    }
+    const client = OPCUAClient.create({
+      applicationName: APPLICATION_NAME,
+      endpointMustExist: false,
+      securityMode: MessageSecurityMode.None,
+      securityPolicy: SecurityPolicy.None,
+      connectionStrategy: { maxRetry: 0, initialDelay: 500, maxDelay: 1000 }
+    });
+
+    let timer = null;
+    const deadline = new Promise((resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`endpoint discovery timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      );
+      timer.unref?.();
+    });
+
+    try {
+      const endpoints = await Promise.race([
+        (async () => {
+          await client.connect(endpointUrl);
+          return client.getEndpoints();
+        })(),
+        deadline
+      ]);
+      return (endpoints || [])
+        .map((endpoint) => {
+          const policyUri = endpoint.securityPolicyUri || '';
+          return {
+            endpointUrl: endpoint.endpointUrl || null,
+            securityMode: MessageSecurityMode[endpoint.securityMode] || String(endpoint.securityMode),
+            securityPolicy: policyUri.includes('#') ? policyUri.split('#').pop() : policyUri,
+            securityLevel: endpoint.securityLevel ?? 0,
+            serverCertificate:
+              endpoint.serverCertificate && endpoint.serverCertificate.length
+                ? describeCertificate(endpoint.serverCertificate)
+                : null
+          };
+        })
+        .sort((a, b) => b.securityLevel - a.securityLevel);
+    } finally {
+      if (timer) clearTimeout(timer);
+      client.disconnect().catch(() => {});
+    }
+  }
+
+  /** The application certificate (PEM + parsed details), creating it if needed. */
+  async getApplicationCertificate() {
+    const certificateManager = await getCertificateManager();
+    const certificateFile = clientCertificateFile(certificateManager);
+    return {
+      applicationUri: APPLICATION_URI,
+      pkiFolder: certificateManager.rootDir,
+      pem: fs.readFileSync(certificateFile, 'utf8'),
+      ...describeCertificate(readCertificate(certificateFile))
+    };
+  }
+
+  /** Trusted + rejected server certificates currently in the PKI store. */
+  async listTrust() {
+    const certificateManager = await getCertificateManager();
+    return {
+      trusted: readCertificateFolder(certificateManager.trustedFolder),
+      rejected: readCertificateFolder(certificateManager.rejectedFolder)
+    };
+  }
+
+  /**
+   * Promote a rejected server certificate (by SHA1 thumbprint) to trusted.
+   * Returns the certificate description, or null if no rejected certificate
+   * matches the thumbprint.
+   */
+  async trustCertificate(thumbprint) {
+    const certificateManager = await getCertificateManager();
+    const wanted = String(thumbprint).toLowerCase();
+    let files = [];
+    try {
+      files = fs.readdirSync(certificateManager.rejectedFolder);
+    } catch {
+      return null;
+    }
+    for (const file of files) {
+      if (!/\.(pem|der|crt|cer)$/i.test(file)) continue;
+      const filePath = path.join(certificateManager.rejectedFolder, file);
+      let der;
+      try {
+        der = readCertificate(filePath);
+      } catch {
+        continue;
+      }
+      if (makeSHA1Thumbprint(der).toString('hex').toLowerCase() !== wanted) continue;
+      await certificateManager.trustCertificate(der); // moves rejected/ -> trusted/certs
+      // If the manager's index knew the cert under a different (canonical)
+      // filename, our on-disk copy survives the move — drop it so the same
+      // thumbprint never shows up as both trusted and rejected.
+      fs.rmSync(filePath, { force: true });
+      return describeCertificate(der);
+    }
+    return null;
   }
 
   requireSession(connectionId) {

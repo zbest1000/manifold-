@@ -94,6 +94,153 @@ test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the gran
   m.shutdown();
 });
 
+test('mqttManager.connectToBroker builds ws/wss URLs and applies MQTT 5 + TLS options', () => {
+  // Intercept via the _mqttConnect seam (mqtt v5's module exports are
+  // non-configurable getters, so mqtt.connect itself can't be stubbed).
+  const m = new MqttManager(fakeIo);
+  const calls = [];
+  m._mqttConnect = (url, options) => {
+    calls.push({ url, options });
+    return { on() {}, end() {} };
+  };
+  try {
+    // ws: explicit port required, wsPath (default /mqtt) lands in the URL.
+    m.connectToBroker({ id: 'w1', host: 'edge', port: 8083, protocol: 'ws' });
+    assert.strictEqual(calls[0].url, 'ws://edge:8083/mqtt');
+    assert.ok(!('protocolVersion' in calls[0].options), 'v4 default must not set protocolVersion');
+
+    // wss: custom path in the URL, TLS opts applied exactly like mqtts, v5 opt-in.
+    m.connectToBroker({
+      id: 'w2', host: 'edge', port: 443, protocol: 'wss', wsPath: '/broker',
+      ca: 'CA', cert: 'CERT', key: 'KEY', mqttVersion: 5
+    });
+    assert.strictEqual(calls[1].url, 'wss://edge:443/broker');
+    assert.strictEqual(calls[1].options.ca, 'CA');
+    assert.strictEqual(calls[1].options.cert, 'CERT');
+    assert.strictEqual(calls[1].options.key, 'KEY');
+    assert.strictEqual(calls[1].options.protocolVersion, 5);
+
+    // The info object round-trips the new fields for GET lists / the edit form.
+    const info = m.getConnection('w2');
+    assert.strictEqual(info.protocol, 'wss');
+    assert.strictEqual(info.wsPath, '/broker');
+    assert.strictEqual(info.mqttVersion, 5);
+    assert.strictEqual(info.subscribeFilter, '#');
+    const plain = m.getConnection('w1');
+    assert.strictEqual(plain.mqttVersion, 4);
+
+    // Validation: ws without a port, bad wsPath, bad version, bad protocol, empty filter.
+    assert.throws(() => m.connectToBroker({ host: 'edge', protocol: 'ws' }), /port is required/);
+    assert.throws(() => m.connectToBroker({ host: 'edge', protocol: 'wss' }), /port is required/);
+    assert.throws(() => m.connectToBroker({ host: 'edge', protocol: 'ws', port: 8083, wsPath: 'mqtt' }), /wsPath/);
+    assert.throws(() => m.connectToBroker({ host: 'edge', mqttVersion: 3 }), /mqttVersion must be 4 or 5/);
+    assert.throws(() => m.connectToBroker({ host: 'edge', protocol: 'http' }), /protocol must be one of/);
+    assert.throws(() => m.connectToBroker({ host: 'edge', subscribeFilter: '' }), /subscribeFilter/);
+  } finally {
+    m.shutdown();
+  }
+});
+
+test('mqttManager autoSubscribe uses the configured subscribeFilter (incl. $share) with QoS fallback', () => {
+  const m = new MqttManager(fakeIo);
+  const handlers = {};
+  const subs = [];
+  m._mqttConnect = () => ({
+    on(ev, fn) { handlers[ev] = fn; },
+    // Mimic a broker that refuses the wildcard grant at QoS 1+ (SUBACK 0x80),
+    // same shape as the existing fallback test.
+    subscribe(topic, opts, cb) {
+      subs.push({ topic, qos: opts.qos });
+      if (opts.qos > 0) {
+        const err = new Error('Subscribe error: Unspecified error');
+        err.packet = { cmd: 'suback', granted: [128] };
+        cb(err, [{ topic, qos: opts.qos }]);
+      } else {
+        cb(null, [{ topic, qos: 0 }]);
+      }
+    },
+    end() {}
+  });
+  try {
+    m.connectToBroker({ id: 's1', host: 'edge', subscribeFilter: '$share/manifold/#' });
+    handlers.connect(); // broker accepts the connection → autoSubscribe fires
+    assert.deepStrictEqual(subs, [
+      { topic: '$share/manifold/#', qos: 1 }, // custom intake filter at the default QoS
+      { topic: '$share/manifold/#', qos: 0 }, // refusal fallback keeps working with it
+      { topic: '$SYS/#', qos: 0 } // secondary $SYS subscribe stays as is
+    ]);
+    assert.ok(m.subscriptions.get('s1').has('$share/manifold/#'));
+  } finally {
+    m.shutdown();
+  }
+});
+
+test('mqttManager surfaces MQTT 5 packet properties on built messages', () => {
+  const m = new MqttManager(fakeIo);
+  const TopicStore = require('../services/topicStore');
+  const brokerId = 'v5';
+  m.connections.set(brokerId, { id: brokerId, mqttVersion: 5, metrics: { messagesReceived: 0, bytesReceived: 0, topicCount: 0, errors: 0 } });
+  m.stores.set(brokerId, new TopicStore());
+  m.topicMeta.set(brokerId, []);
+  m.msgProps.set(brokerId, new Map());
+
+  m.handleMessage(brokerId, 'plant/l1/temp', Buffer.from('{"v":1}'), {
+    qos: 1,
+    retain: false,
+    properties: {
+      userProperties: { trace: 't-1' },
+      contentType: 'application/json',
+      responseTopic: 'plant/l1/reply',
+      correlationData: Buffer.from('abc')
+    }
+  });
+  const [row] = m.stores.get(brokerId).drain();
+  const msg = m.buildMessage(brokerId, row);
+  assert.deepStrictEqual(msg.properties, {
+    userProperties: { trace: 't-1' },
+    contentType: 'application/json',
+    responseTopic: 'plant/l1/reply',
+    correlationData: Buffer.from('abc').toString('base64') // Buffers surface as base64
+  });
+
+  // v4-style packet (no properties key) → nothing attached, hot path untouched.
+  m.handleMessage(brokerId, 'plant/l1/press', Buffer.from('3.1'), { qos: 0, retain: false });
+  const rows = m.stores.get(brokerId).drain();
+  const plain = m.buildMessage(brokerId, rows.find((r) => r.topic === 'plant/l1/press'));
+  assert.ok(!('properties' in plain));
+
+  // A later publish on the SAME topic without the surfaced keys clears them.
+  m.handleMessage(brokerId, 'plant/l1/temp', Buffer.from('{"v":2}'), { qos: 1, retain: false, properties: {} });
+  const [row2] = m.stores.get(brokerId).drain();
+  assert.ok(!('properties' in m.buildMessage(brokerId, row2)));
+  m.shutdown();
+});
+
+test('mqttManager.publish forwards MQTT 5 properties only on v5 sessions', async () => {
+  const m = new MqttManager(fakeIo);
+  const published = [];
+  const fakeClient = {
+    publish(topic, body, opts, cb) {
+      published.push(opts);
+      cb(null);
+    },
+    end() {}
+  };
+  const metrics = () => ({ messagesReceived: 0, messagesSent: 0, bytesReceived: 0, bytesSent: 0, topicCount: 0, errors: 0 });
+  m.clients.set('p5', fakeClient);
+  m.connections.set('p5', { status: 'connected', mqttVersion: 5, metrics: metrics() });
+  m.clients.set('p4', fakeClient);
+  m.connections.set('p4', { status: 'connected', mqttVersion: 4, metrics: metrics() });
+
+  const properties = { userProperties: { source: 'manifold' }, contentType: 'text/plain', responseTopic: 'r/t' };
+  await m.publish('p5', 't', 'x', { qos: 1, properties });
+  await m.publish('p4', 't', 'x', { qos: 1, properties });
+  assert.deepStrictEqual(published[0].properties, properties);
+  assert.strictEqual(published[0].qos, 1);
+  assert.ok(!('properties' in published[1]), 'v4 sessions must silently drop publish properties');
+  m.shutdown();
+});
+
 test('mqttManager.publish rejects (never throws) for a disconnected broker', async () => {
   const m = new MqttManager(fakeIo);
   // Direct call must reject, not throw.

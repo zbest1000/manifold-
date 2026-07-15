@@ -68,6 +68,7 @@ export default function TopicGraph() {
   const setTopics = useStore((s) => s.setTopics);
 
   const [brokerId, setBrokerId] = useState(null);
+  const [spHosts, setSpHosts] = useState([]); // Sparkplug host applications (spBv1.0/STATE/*)
   const [selected, setSelected] = useState(null);
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [matchIds, setMatchIds] = useState(null);
@@ -115,6 +116,29 @@ export default function TopicGraph() {
       .then((res) => setTopics(brokerId, res.topics))
       .catch(() => {});
   }, [brokerId, setTopics]);
+
+  // Sparkplug host applications (spBv1.0/STATE/*) — polled from the topology
+  // snapshot; the strip only shows when the broker actually carries host STATE.
+  useEffect(() => {
+    if (!brokerId) {
+      setSpHosts([]);
+      return;
+    }
+    let alive = true;
+    const load = () =>
+      api
+        .brokerSparkplug(brokerId)
+        .then((res) => alive && setSpHosts(res.hosts || []))
+        .catch(() => alive && setSpHosts([]));
+    load();
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') load();
+    }, 10000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [brokerId]);
 
   const broker = brokers.find((b) => b.id === brokerId);
   const topicVersion = topicVersionMap[brokerId] || 0;
@@ -292,6 +316,30 @@ export default function TopicGraph() {
           </div>
         }
       />
+
+      {spHosts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/5 bg-surface-900/40 px-4 py-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            <Cpu size={12} className="text-accent-400" /> Host applications
+          </span>
+          {spHosts.map((h) => (
+            <span
+              key={h.id}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-surface-950/60 px-2 py-1 text-[11px]"
+              title={`spBv1.0/STATE/${h.id}`}
+            >
+              <span className={clsx('h-1.5 w-1.5 rounded-full', h.online ? 'bg-emerald-400' : h.online === false ? 'bg-rose-400' : 'bg-slate-500')} />
+              <span className="font-mono text-slate-200">{h.id}</span>
+              <Badge status={h.online ? 'connected' : 'offline'}>{h.online ? 'online' : h.online === false ? 'offline' : 'unknown'}</Badge>
+              {(h.timestamp || h.lastSeen) && (
+                <span className="text-slate-500">
+                  {formatDistanceToNow(new Date(h.timestamp || h.lastSeen), { addSuffix: true })}
+                </span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="relative flex flex-1 overflow-hidden">
         {view === 'tree' ? (
