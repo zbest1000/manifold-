@@ -69,6 +69,7 @@ class AuditLog {
         }
         this.record({
           role: req.role || 'open',
+          ...(req.tokenName && req.tokenName !== 'open' ? { tokenName: req.tokenName } : {}),
           ip: req.ip,
           method: req.method,
           path: req.originalUrl,

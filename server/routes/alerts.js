@@ -8,8 +8,15 @@ const router = express.Router();
 
 // GET /api/alerts/rules
 router.get('/rules', (req, res) => {
-  const { profiles } = req.app.locals.services;
-  res.json({ rules: profiles?.alertRules() || [], types: RULE_TYPES });
+  const { profiles, alerts } = req.app.locals.services;
+  res.json({
+    rules: profiles?.alertRules() || [],
+    types: RULE_TYPES,
+    // Webhook delivery health — collected by the engine, surfaced here so a
+    // silently failing webhook shows up somewhere an operator looks.
+    webhookFailures: alerts?.webhookFailures || 0,
+    lastWebhookError: alerts?.lastWebhookError || null
+  });
 });
 
 // POST /api/alerts/rules { name, type, brokerId, path?, topic?, prefix?, thresholdMs?, webhookUrl?, enabled? }

@@ -1,3 +1,8 @@
+const { fetchWithTimeout } = require('./httpTimeout');
+
+// Admin APIs get a hard per-request deadline so a wedged broker admin
+// endpoint can't hang the Flows view indefinitely.
+const defaultFetch = (url, opts) => fetchWithTimeout(url, opts, 10_000);
 'use strict';
 
 /**
@@ -182,7 +187,7 @@ async function hivemqPubSub(config, fetchImpl) {
 const BACKENDS = { emqx: emqxPubSub, hivemq: hivemqPubSub };
 
 /** Fetch normalized pub/sub topology from a broker admin API. */
-async function fetchPubSub(config = {}, fetchImpl = globalThis.fetch) {
+async function fetchPubSub(config = {}, fetchImpl = defaultFetch) {
   const type = String(config.type || 'emqx');
   const backend = BACKENDS[type];
   if (!backend) throw new Error(`unsupported admin type "${type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);

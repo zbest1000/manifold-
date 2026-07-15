@@ -94,6 +94,22 @@ test('mqttManager.subscribe falls back to QoS 0 when the broker refuses the gran
   m.shutdown();
 });
 
+test('mqttManager.publish rejects (never throws) for a disconnected broker', async () => {
+  const m = new MqttManager(fakeIo);
+  // Direct call must reject, not throw.
+  await assert.rejects(() => m.publish('nope', 'a/b', 'x'), /not connected/);
+  // The replayer/model-engine pattern: fired from a timer with only .catch().
+  // A synchronous throw here would escape as an uncaught exception and kill
+  // the process — the await below only survives if publish stays async.
+  const caught = await new Promise((resolve) => {
+    setTimeout(() => {
+      m.publish('nope', 'a/b', 'x').then(() => resolve(null)).catch((e) => resolve(e));
+    }, 5);
+  });
+  assert.match(caught.message, /not connected/);
+  m.shutdown();
+});
+
 test('cesmiiClient requires full configuration', () => {
   const c = new CesmiiClient();
   assert.strictEqual(c.isConfigured(), false);

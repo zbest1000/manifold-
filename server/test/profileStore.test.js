@@ -55,3 +55,15 @@ test('corrupt file falls back to empty state without crashing', () => {
   const a = new ProfileStore(dir);
   assert.deepStrictEqual(a.brokers(), []);
 });
+
+test('corrupt profiles file is backed up to .bak, not silently discarded', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifold-prof-bak-'));
+  const file = path.join(dir, 'profiles.json');
+  fs.writeFileSync(file, '{ this is not json');
+  const ProfileStore = require('../services/profileStore');
+  const store = new ProfileStore(dir);
+  assert.deepStrictEqual(store.listMqtt?.() ?? [], []);
+  assert.ok(fs.existsSync(`${file}.bak`), 'corrupt content must be preserved as .bak');
+  assert.strictEqual(fs.readFileSync(`${file}.bak`, 'utf8'), '{ this is not json');
+  fs.rmSync(dir, { recursive: true, force: true });
+});

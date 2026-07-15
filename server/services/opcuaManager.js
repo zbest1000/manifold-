@@ -74,7 +74,16 @@ class OpcuaManager extends EventEmitter {
       monitoredCount: 0
     };
 
-    const entry = { client, session: null, subscription: null, info, monitored: new Map() };
+    const entry = {
+      client,
+      session: null,
+      subscription: null,
+      info,
+      monitored: new Map(),
+      // nodeId -> samplingInterval, so monitors can be rebuilt after reconnect
+      monitorSpecs: new Map(),
+      closing: false
+    };
     this.connections.set(connectionId, entry);
     this.io.emit('opcua-connection-attempt', { connectionId, connection: { ...info } });
 
@@ -85,6 +94,22 @@ class OpcuaManager extends EventEmitter {
     client.on('connection_reestablished', () => {
       info.status = 'connected';
       this.io.emit('opcua-connected', { connectionId, connection: { ...info } });
+      // The transport is back, but the subscription/monitored items may not
+      // have survived — rebuild them from the recorded specs so monitoredCount
+      // never lies after a reconnect.
+      this._recoverMonitors(connectionId).catch((error) => {
+        info.lastError = `re-monitor after reconnect: ${error.message}`;
+        this.io.emit('opcua-error', { connectionId, error: info.lastError });
+      });
+    });
+    client.on('close', () => {
+      // Fires when the client gives up for good (or on user disconnect).
+      // Without this, a dead endpoint shows "reconnecting" forever.
+      if (!entry.closing && info.status !== 'disconnected') {
+        info.status = 'disconnected';
+        info.lastError = info.lastError || 'connection closed';
+        this.io.emit('opcua-disconnected', { connectionId });
+      }
     });
 
     try {
@@ -207,9 +232,34 @@ class OpcuaManager extends EventEmitter {
     });
 
     entry.monitored.set(nodeId, item);
+    entry.monitorSpecs.set(nodeId, samplingInterval);
     entry.info.monitoredCount = entry.monitored.size;
     this.io.emit('opcua-monitor-started', { connectionId, nodeId, samplingInterval });
     return { connectionId, nodeId, status: 'monitoring', samplingInterval };
+  }
+
+  /**
+   * Rebuild the subscription and every monitored item after a reconnect.
+   * Deterministic over clever: the old subscription is torn down even if it
+   * survived (a redundant re-subscribe is cheap; a silently dead monitor is
+   * not) and each recorded (nodeId, interval) is re-monitored.
+   */
+  async _recoverMonitors(connectionId) {
+    const entry = this.connections.get(connectionId);
+    if (!entry || entry.monitorSpecs.size === 0) return;
+    const specs = [...entry.monitorSpecs.entries()];
+    if (entry.subscription) {
+      await entry.subscription.terminate().catch(() => {});
+      entry.subscription = null;
+    }
+    entry.monitored.clear();
+    entry.monitorSpecs.clear();
+    entry.info.monitoredCount = 0;
+    for (const [nodeId, interval] of specs) {
+      await this.monitor(connectionId, nodeId, interval).catch((error) => {
+        entry.info.lastError = `re-monitor ${nodeId}: ${error.message}`;
+      });
+    }
   }
 
   async unmonitor(connectionId, nodeId) {
@@ -218,6 +268,7 @@ class OpcuaManager extends EventEmitter {
     if (item) {
       await item.terminate();
       entry.monitored.delete(nodeId);
+      entry.monitorSpecs.delete(nodeId);
       entry.info.monitoredCount = entry.monitored.size;
     }
     this.io.emit('opcua-monitor-stopped', { connectionId, nodeId });
@@ -229,6 +280,7 @@ class OpcuaManager extends EventEmitter {
     if (!entry) {
       throw new Error(`Unknown OPC UA connection ${connectionId}`);
     }
+    entry.closing = true; // suppress the 'close' handler's disconnected event
 
     try {
       for (const item of entry.monitored.values()) {

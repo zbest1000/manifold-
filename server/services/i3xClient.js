@@ -1,4 +1,5 @@
 const { EventEmitter } = require('events');
+const { fetchWithTimeout } = require('./httpTimeout');
 
 /**
  * Client for a CESMII i3X server — the "Common Contextual Manufacturing
@@ -52,16 +53,16 @@ class I3xClient extends EventEmitter {
     return h;
   }
 
-  async request(path, { method = 'GET', body, baseUrl } = {}) {
+  async request(path, { method = 'GET', body, baseUrl, timeoutMs } = {}) {
     const root = (baseUrl || this.config?.baseUrl || '').replace(/\/$/, '');
     if (!root) throw new Error('i3X client is not configured');
     let res;
     try {
-      res = await fetch(`${root}${path}`, {
+      res = await fetchWithTimeout(`${root}${path}`, {
         method,
         headers: this.headers(),
         body: body ? JSON.stringify(body) : undefined
-      });
+      }, timeoutMs);
     } catch (error) {
       throw new Error(`i3X request failed: ${error.message}`);
     }
@@ -78,7 +79,7 @@ class I3xClient extends EventEmitter {
    */
   async probe(baseUrl) {
     try {
-      const info = await this.request('/info', { baseUrl });
+      const info = await this.request('/info', { baseUrl, timeoutMs: 3000 });
       if (info && (info.specVersion || info.serverName)) return info;
       return null;
     } catch {

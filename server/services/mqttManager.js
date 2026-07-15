@@ -371,7 +371,11 @@ class MqttManager extends EventEmitter {
     });
   }
 
-  publish(brokerId, topic, payload, options = {}) {
+  // Async contract: publish() NEVER throws synchronously. Callers in timer
+  // callbacks (replayer, model engine) attach .catch() to the returned
+  // promise — a synchronous throw from requireClient would escape those
+  // handlers and take down the process as an uncaught exception.
+  async publish(brokerId, topic, payload, options = {}) {
     const client = this.requireClient(brokerId);
     const info = this.connections.get(brokerId);
     const body = typeof payload === 'string' ? payload : JSON.stringify(payload);

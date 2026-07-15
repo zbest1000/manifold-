@@ -49,7 +49,10 @@ const io = socketIo(server, {
   }
 });
 
-app.use(cors());
+// CORS: in production the client is served same-origin, so no cross-origin
+// grants are needed at all; in dev the Vite server's origin gets access.
+// A blanket cors() would let any website script an authenticated browser.
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000' }));
 app.use(express.json({ limit: '10mb' }));
 
 // ---- Authentication + roles -------------------------------------------------
@@ -57,11 +60,23 @@ app.use(express.json({ limit: '10mb' }));
 // (including Sparkplug commands that actuate equipment), disconnect
 // connections, and start network scans. Set MANIFOLD_AUTH_TOKEN to require a bearer
 // token on every /api route and on the Socket.IO handshake. MANIFOLD_VIEWER_TOKEN
-// (optional) grants a READ-ONLY role: GETs succeed, every mutation is 403 —
-// hand it to dashboards and observers instead of the admin token. Without any
-// token the server runs open (dev convenience) and says so loudly at startup.
+// (optional) grants a READ-ONLY role: GETs succeed, every mutation is 403.
+// For teams, MANIFOLD_TOKENS holds NAMED tokens ("alice:s3cret:admin,grafana:tok:viewer")
+// so each credential is individually revocable and audit entries carry who
+// acted. Without any token the server runs open (dev convenience) and says so
+// loudly at startup.
 const AUTH_TOKEN = process.env.MANIFOLD_AUTH_TOKEN || '';
 const VIEWER_TOKEN = process.env.MANIFOLD_VIEWER_TOKEN || '';
+const NAMED_TOKENS = (process.env.MANIFOLD_TOKENS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((s) => {
+    const [name, token, role] = s.split(':');
+    return name && token ? { name, token, role: role === 'viewer' ? 'viewer' : 'admin' } : null;
+  })
+  .filter(Boolean);
+const AUTH_ENABLED = Boolean(AUTH_TOKEN || NAMED_TOKENS.length);
 
 function timingEqual(candidate, expected) {
   if (typeof candidate !== 'string' || candidate.length === 0 || !expected) return false;
@@ -70,22 +85,53 @@ function timingEqual(candidate, expected) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function roleForToken(token) {
-  if (!AUTH_TOKEN) return 'admin'; // open mode
-  if (timingEqual(token, AUTH_TOKEN)) return 'admin';
-  if (VIEWER_TOKEN && timingEqual(token, VIEWER_TOKEN)) return 'viewer';
+/** → { role, tokenName } or null. tokenName feeds the audit trail. */
+function identityForToken(token) {
+  if (!AUTH_ENABLED) return { role: 'admin', tokenName: 'open' };
+  if (AUTH_TOKEN && timingEqual(token, AUTH_TOKEN)) return { role: 'admin', tokenName: 'admin' };
+  if (VIEWER_TOKEN && timingEqual(token, VIEWER_TOKEN)) return { role: 'viewer', tokenName: 'viewer' };
+  for (const t of NAMED_TOKENS) {
+    if (timingEqual(token, t.token)) return { role: t.role, tokenName: t.name };
+  }
   return null;
+}
+
+function roleForToken(token) {
+  return identityForToken(token)?.role || null;
+}
+
+// Brute-force guard: a per-IP token bucket on FAILED auth attempts. Successful
+// requests are never throttled — this only slows credential guessing.
+const authFailures = new Map(); // ip -> { count, resetAt }
+const AUTH_FAIL_LIMIT = 20;
+const AUTH_FAIL_WINDOW_MS = 60_000;
+function authFailureExceeded(ip) {
+  const now = Date.now();
+  let e = authFailures.get(ip);
+  if (!e || now > e.resetAt) {
+    e = { count: 0, resetAt: now + AUTH_FAIL_WINDOW_MS };
+    authFailures.set(ip, e);
+    if (authFailures.size > 10_000) authFailures.clear(); // bounded, coarse
+  }
+  e.count++;
+  return e.count > AUTH_FAIL_LIMIT;
 }
 
 app.use('/api', (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const role = roleForToken(token);
-  if (!role) return res.status(401).json({ error: 'Unauthorized: missing or invalid bearer token' });
-  if (role === 'viewer' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+  const identity = identityForToken(token);
+  if (!identity) {
+    if (authFailureExceeded(req.ip)) {
+      return res.status(429).json({ error: 'Too many failed authentication attempts — wait a minute' });
+    }
+    return res.status(401).json({ error: 'Unauthorized: missing or invalid bearer token' });
+  }
+  if (identity.role === 'viewer' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return res.status(403).json({ error: 'Forbidden: viewer token is read-only' });
   }
-  req.role = role;
+  req.role = identity.role;
+  req.tokenName = identity.tokenName;
   next();
 });
 
@@ -151,9 +197,11 @@ function restoreProfiles() {
   }
 }
 if (process.env.MANIFOLD_NO_RESTORE !== '1') {
-  restoreProfiles();
+  // History BEFORE broker reconnect: restore only refills empty rings, so a
+  // fast-publishing broker that connects first would wipe out the snapshot.
   const restoredMsgs = history.restore();
   if (restoredMsgs) console.log(`history: restored ${restoredMsgs} recent message(s)`);
+  restoreProfiles();
 }
 history.start();
 alerts.start();
@@ -320,7 +368,7 @@ if (process.env.NODE_ENV === 'production') {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Manifold server listening on port ${PORT}`);
-  if (!AUTH_TOKEN) {
+  if (!AUTH_ENABLED) {
     console.warn(
       '⚠️  MANIFOLD_AUTH_TOKEN is not set — the API and socket are UNAUTHENTICATED. ' +
         'Anyone who can reach this port can publish to brokers and start scans. ' +

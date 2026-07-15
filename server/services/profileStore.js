@@ -40,8 +40,13 @@ class ProfileStore {
   }
 
   _load() {
+    let raw = null;
     try {
-      const raw = fs.readFileSync(this.file, 'utf8');
+      raw = fs.readFileSync(this.file, 'utf8');
+    } catch {
+      return; // no file yet — start clean
+    }
+    try {
       const parsed = JSON.parse(raw);
       this.data = {
         mqtt: parsed.mqtt || {},
@@ -53,7 +58,14 @@ class ProfileStore {
         ...Object.fromEntries(COLLECTIONS.map((c) => [c, parsed[c] || {}]))
       };
     } catch {
-      // no file yet, or unreadable/corrupt — start clean, don't crash the server
+      // Corrupt JSON: keep the evidence instead of silently discarding every
+      // saved connection — the .bak lets an operator recover credentials.
+      try {
+        fs.writeFileSync(`${this.file}.bak`, raw, { mode: 0o600 });
+        console.error(`profileStore: ${this.file} is corrupt — backed up to ${this.file}.bak and starting clean`);
+      } catch {
+        // best effort
+      }
     }
   }
 
