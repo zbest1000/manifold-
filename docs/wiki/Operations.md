@@ -9,9 +9,9 @@ The Overview page surfaces platform health live — pipelines, historians
 (store-and-forward state), tag bindings, and alerts, each card linking to its
 module:
 
-<div align="center">
-<img src="images/overview.png" alt="Overview with health cards" width="850">
-</div>
+![Overview with health cards](images/overview.png)
+
+> *Pipelines, historians, tag bindings, and alerts — live, each card linking to its module.*
 
 ## Authentication and roles
 

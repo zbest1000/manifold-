@@ -48,11 +48,9 @@ flowchart LR
    values, and per-branch rates appear with zero registration — it is all
    derived from observed traffic.
 
-<div align="center">
-<img src="images/broker-form.png" alt="Broker connection form" width="800">
+![Broker connection form](images/broker-form.png)
 
-*The connection form. Everything has a sensible default; the QoS setting is explained in [Broker Setup](Broker-Setup).*
-</div>
+> *The connection form. Everything has a sensible default; the QoS setting is explained in [Broker Setup](Broker-Setup).*
 
 > ⚠️ **Connected but empty on EMQX?** Stock EMQX silently refuses wildcard
 > subscriptions at QoS 1. Two-minute fix in [Broker Setup](Broker-Setup).
