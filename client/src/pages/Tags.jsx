@@ -396,8 +396,6 @@ function sparkplugSourceFromSelection(brokerId, selection) {
   const entries = [...selection.entries()];
   const first = entries[0];
   const meta = first[1].meta || {};
-  const parts = first[0].includes('/') ? null : null; // metric addresses are bare names
-  void parts;
   // The browse API returns metric nodes with address = metric name and
   // meta.device set; the tree id carried the scope, so we ask the user's
   // selection context: all metrics share the source node's scope.

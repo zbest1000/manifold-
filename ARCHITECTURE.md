@@ -26,7 +26,7 @@ flowchart LR
         TB[tagBindings]
         SP[sparkplugPublisher]
         OB[historianOutbox]
-        H[historians<br/>influx / timescale / timebase / timebase-ce]
+        H[historians<br/>influx / timescale / timebase]
         AL[alertEngine]
         AU[auditLog]
         MX[metricsExporter]
@@ -169,14 +169,13 @@ flowchart LR
 
 ## Historians and store-and-forward
 
-Four backends share one write interface (`writePoints`):
+Three backends share one write interface (`writePoints`):
 
 | Backend | Wire format | Notes |
 |---|---|---|
 | InfluxDB v2 | line protocol | numeric values write `value=`, non-numeric write `raw="…"` — a topic that alternates types cannot cause field-type conflicts in a shard |
 | TimescaleDB / PostgreSQL | batched parameterized INSERT | table auto-created, promoted to hypertable when the extension exists; identifier allow-list; pooled connections with bounded connect/query timeouts |
 | Timebase (Flow Software) | TVQ REST on `:4511` | datasets auto-create; write path overridable per instance; Timebase's native MQTT/Sparkplug ingestion is an equally valid path |
-| FINOS TimeBase CE | JSON rows via TimebaseWS `:8099` | optional Deltix HMAC-SHA384 signing |
 
 Delivery always goes through the **outbox** — engines never call a historian
 directly:
@@ -299,7 +298,6 @@ Observed behavior that shapes the implementation:
 | `POST` | `/api/cesmii/config` · `/history` | CESMII configure; time-series |
 | `POST` | `/api/i3x/connect` · `/probe` · `/value` · `/history` | i3X connect/probe; reads |
 | `GET` | `/api/i3x/objects` · `/graph` · `/namespaces` | i3X inventory |
-| `POST` | `/api/layout` · `GET /api/layout/engines` | Server-computed graph layouts |
 
 Live updates (messages, broker stats, engine metrics, alerts, OPC UA values,
 discovery progress) stream over Socket.IO. Engine metrics push every 2 s only

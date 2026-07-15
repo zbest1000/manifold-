@@ -16,7 +16,7 @@
 |---|---|---|
 | 🏁 | **[Getting Started](Getting-Started)** | Install, run, and connect your first broker in five minutes |
 | 🔌 | **[Broker Setup](Broker-Setup)** | Intake QoS, the EMQX ACL recipe, admin APIs for consumer lineage |
-| 🗄️ | **[Historians](Historians)** | InfluxDB, TimescaleDB, Timebase, TimeBase CE — with store-and-forward |
+| 🗄️ | **[Historians](Historians)** | InfluxDB, TimescaleDB, Timebase — with store-and-forward |
 | 🔀 | **[Pipelines and Models](Pipelines-and-Models)** | Route, reshape, and contextualize the live stream |
 | 🏷️ | **[Tags and Sparkplug](Tags-and-Sparkplug)** | Browse device tags and publish them into the UNS |
 | 🛡️ | **[Operations](Operations)** | Auth, audit, Prometheus, config as code, alerts |

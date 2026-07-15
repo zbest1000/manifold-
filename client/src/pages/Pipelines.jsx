@@ -506,7 +506,7 @@ function ModelsTab({ brokers }) {
 function HistoriansTab() {
   const [data, setData] = useState({ historians: [], types: [] });
   const [outbox, setOutbox] = useState({});
-  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', stream: '', messageType: '', writePath: '', apiKey: '', apiSecret: '', host: '', port: '', database: '', user: '', password: '', table: '', ssl: false, dropPolicy: 'newest' });
+  const [form, setForm] = useState({ type: 'influxdb', name: '', url: '', org: '', bucket: '', token: '', measurement: '', dataset: '', writePath: '', apiKey: '', host: '', port: '', database: '', user: '', password: '', table: '', ssl: false, dropPolicy: 'newest' });
   const [testing, setTesting] = useState(null); // id -> result
   const load = useCallback(() => api.listHistorians().then(setData).catch(() => {}), []);
   useEffect(() => {
@@ -549,7 +549,6 @@ function HistoriansTab() {
                 {h.type === 'timescaledb' ? `${h.host}:${h.port || 5432}/${h.database} · table=${h.table || 'manifold_samples'}` : h.url}
                 {h.type === 'influxdb' && ` · org=${h.org} bucket=${h.bucket}`}
                 {h.type === 'timebase' && ` · dataset=${h.dataset}`}
-                {h.type === 'timebase-ce' && ` · stream=${h.stream}`}
               </p>
               {outbox[h.id] && (
                 <p className="mt-0.5 text-[11px]">
@@ -591,7 +590,6 @@ function HistoriansTab() {
               <option value="influxdb">InfluxDB v2</option>
               <option value="timebase">Timebase historian (Flow Software)</option>
               <option value="timescaledb">TimescaleDB / PostgreSQL</option>
-              <option value="timebase-ce">TimeBase CE (FINOS, WS gateway)</option>
             </select>
           </Field>
           <Field label="Name">
@@ -609,7 +607,7 @@ function HistoriansTab() {
                 value={form.url}
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
                 placeholder={
-                  form.type === 'influxdb' ? 'http://influx-host:8086' : form.type === 'timebase-ce' ? 'http://gateway-host:8099' : 'http://historian-host:4511'
+                  form.type === 'influxdb' ? 'http://influx-host:8086' : 'http://historian-host:4511'
                 }
               />
             </Field>
@@ -668,36 +666,12 @@ function HistoriansTab() {
               </Field>
             </>
           )}
-          {form.type === 'timebase-ce' && (
-            <>
-              <Field label="Stream">
-                <Input value={form.stream} onChange={(e) => setForm({ ...form, stream: e.target.value })} placeholder="manifold" />
-              </Field>
-              <Field label="Message $type (optional)">
-                <Input value={form.messageType} onChange={(e) => setForm({ ...form, messageType: e.target.value })} placeholder="ManifoldSample" />
-              </Field>
-              <Field label="API key (optional)">
-                <Input value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-              </Field>
-              <Field label="API secret (optional)">
-                <Input type="password" value={form.apiSecret} onChange={(e) => setForm({ ...form, apiSecret: e.target.value })} />
-              </Field>
-            </>
-          )}
         </div>
         {form.type === 'timebase' && (
           <p className="mt-2 text-[11px] leading-snug text-slate-500">
             Timebase writes TVQ samples into the dataset (auto-created on first write; points older than a tag's newest
             sample are ignored by the historian). Timebase also ingests MQTT/Sparkplug natively — pointing its collector
             at this broker, or at a pipeline's output namespace, is an equally good path.
-          </p>
-        )}
-        {form.type === 'timebase-ce' && (
-          <p className="mt-2 text-[11px] leading-snug text-slate-500">
-            Writes JSON rows to the TimebaseWS gateway (default <span className="mono">:8099/api/v0/&lt;stream&gt;/write</span>) as
-            {' {$type, symbol, timestamp, value, quality}'} — symbol = tag path. Leave keys empty for unauthenticated CE
-            quickstarts; with keys, requests are Deltix HMAC-SHA384 signed. Confirm the write path on your gateway's
-            Swagger if the version differs.
           </p>
         )}
         <Button
@@ -708,8 +682,7 @@ function HistoriansTab() {
               ? !form.host || !form.database || !form.user
               : !form.url ||
                 (form.type === 'influxdb' && (!form.org || !form.bucket)) ||
-                (form.type === 'timebase' && !form.dataset) ||
-                (form.type === 'timebase-ce' && !form.stream)
+                (form.type === 'timebase' && !form.dataset)
           }
         >
           <Plus size={14} className="mr-1" /> Add historian

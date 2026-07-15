@@ -100,31 +100,6 @@ test('timebase backend groups TVQs per tag into the dataset', async () => {
   assert.strictEqual(temp.data[0].t, new Date(1700000000000).toISOString());
 });
 
-test('timebase-ce backend writes gateway JSON rows with optional Deltix signing', async () => {
-  let captured;
-  const fetchImpl = async (url, opts) => {
-    captured = { url, body: JSON.parse(opts.body), headers: opts.headers };
-    return { ok: true, status: 200, text: async () => '' };
-  };
-  const conn = { type: 'timebase-ce', url: 'http://tb:8099', stream: 'manifold', apiKey: 'k1', apiSecret: 's1' };
-  await historians.writePoints(conn, [{ tag: 'plant/temp', ts: 1700000000000, value: 21.5, quality: 192 }], fetchImpl);
-  assert.strictEqual(captured.url, 'http://tb:8099/api/v0/manifold/write');
-  const row = captured.body[0];
-  assert.strictEqual(row.$type, 'ManifoldSample');
-  assert.strictEqual(row.symbol, 'plant/temp');
-  assert.strictEqual(row.timestamp, new Date(1700000000000).toISOString());
-  assert.strictEqual(row.value, 21.5);
-  assert.strictEqual(row.quality, 192);
-  // Deltix HMAC signing headers present and deterministic
-  assert.strictEqual(captured.headers['X-Deltix-ApiKey'], 'k1');
-  assert.ok(captured.headers['X-Deltix-Signature']?.length > 40);
-
-  // unauthenticated CE quickstart: no signing headers at all
-  const openConn = { type: 'timebase-ce', url: 'http://tb:8099', stream: 's1' };
-  await historians.writePoints(openConn, [{ tag: 't', ts: 1, value: 2 }], fetchImpl);
-  assert.ok(!('X-Deltix-ApiKey' in captured.headers));
-});
-
 test('timescaledb backend creates schema once and batch-inserts parameterized rows', async () => {
   const queries = [];
   const fakePool = { query: async (text, values) => (queries.push({ text: text.replace(/\s+/g, ' ').trim(), values }), { rows: [] }) };

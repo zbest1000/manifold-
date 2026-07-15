@@ -78,18 +78,6 @@ Writes are TVQ samples. Timebase also ingests MQTT/Sparkplug natively, so
 pointing its own collector at a pipeline's output namespace is an equally
 valid integration.
 
-### FINOS TimeBase CE
-
-| Field | Value |
-|---|---|
-| URL | TimebaseWS gateway, `http://gateway-host:8099` |
-| Stream | target stream |
-| Message $type | optional |
-| API key / secret | optional — requests are Deltix HMAC-SHA384 signed when set |
-
-Rows are JSON `{$type, symbol, timestamp, value, raw, quality}` with the tag
-path as `symbol`.
-
 ## Where the data comes from
 
 - **Pipelines** with a historian target — see [Pipelines and Models](Pipelines-and-Models).

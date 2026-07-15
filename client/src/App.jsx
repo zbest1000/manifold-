@@ -41,14 +41,17 @@ export default function App() {
         <Route path="settings" element={<S><Settings2 /></S>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
-      <Route
-        path="/bench"
-        element={
-          <Suspense fallback={<div className="grid h-screen place-items-center text-slate-400">Loading bench…</div>}>
-            <Bench />
-          </Suspense>
-        }
-      />
+      {import.meta.env.DEV && (
+        // Internal renderer benchmark harness — dev builds only.
+        <Route
+          path="/bench"
+          element={
+            <Suspense fallback={<div className="grid h-screen place-items-center text-slate-400">Loading bench…</div>}>
+              <Bench />
+            </Suspense>
+          }
+        />
+      )}
     </Routes>
   );
 }

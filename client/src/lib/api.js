@@ -85,6 +85,11 @@ export const api = {
   addMount: (mount) => request('/api/uns/mounts', { method: 'POST', body: JSON.stringify(mount) }),
   removeMount: (id) => request(`/api/uns/mounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // UNS custom icons (user-defined single-path SVGs for the icon picker)
+  listUnsIcons: () => request('/api/uns/icons'),
+  saveUnsIcon: (icon) => request('/api/uns/icons', { method: 'POST', body: JSON.stringify(icon) }),
+  deleteUnsIcon: (id) => request(`/api/uns/icons/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // Historians (InfluxDB / Timebase)
   listHistorians: () => request('/api/historians'),
   saveHistorian: (h) => request('/api/historians', { method: 'POST', body: JSON.stringify(h) }),
@@ -193,21 +198,5 @@ export const api = {
   },
   i3xValue: (elementIds, maxDepth = 1) =>
     request('/api/i3x/value', { method: 'POST', body: JSON.stringify({ elementIds, maxDepth }) }),
-  i3xHistory: (body) => request('/api/i3x/history', { method: 'POST', body: JSON.stringify(body) }),
-
-  // Server-side graph layout (Graphviz dot/sfdp/twopi/circo, Cytoscape fcose).
-  // Only ids + edges are sent — enough for layout, and keeps the payload small.
-  layoutEngines: () => request('/api/layout/engines'),
-  computeLayout: (graph, engine, direction) =>
-    request('/api/layout', {
-      method: 'POST',
-      body: JSON.stringify({
-        graph: {
-          nodes: graph.nodes.map((n) => ({ id: n.id })),
-          links: graph.links.map((l) => ({ source: l.source, target: l.target }))
-        },
-        engine,
-        direction
-      })
-    })
+  i3xHistory: (body) => request('/api/i3x/history', { method: 'POST', body: JSON.stringify(body) })
 };

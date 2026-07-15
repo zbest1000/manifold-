@@ -29,7 +29,7 @@ Manifold connects to brokers and servers, streams their data in real time, and r
 **DataOps**
 - Pipelines: filter → transform chain (repath, pick/rename/set, scale, numeric, Sparkplug flatten, TVQ envelope) → broker or historian, with a dry-run preview against live topics and two-layer loop protection.
 - Models: merge fields from many topics into one object at a clean UNS path.
-- Historians: InfluxDB v2, TimescaleDB/PostgreSQL, Timebase (Flow Software), and FINOS TimeBase CE — all through a store-and-forward outbox with disk spill and configurable drop policy.
+- Historians: InfluxDB v2, TimescaleDB/PostgreSQL, and Timebase (Flow Software) — all through a store-and-forward outbox with disk spill and configurable drop policy.
 - Recorder and replay, schema contracts with drift detection, alert rules with webhooks.
 
 **Tags**
@@ -67,7 +67,7 @@ Manifold is a control plane: it can publish to brokers, send Sparkplug commands,
 MANIFOLD_AUTH_TOKEN=$(openssl rand -hex 24) npm start
 ```
 
-With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role. Without tokens the server runs open and warns at startup.
+With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role, and `MANIFOLD_TOKENS` (`name:token:role,…`) issues named, individually revocable tokens whose names appear in the audit trail. Failed authentication is rate-limited per IP. Without tokens the server runs open and warns at startup.
 
 Connection profiles persist in `server/data/profiles.json` (mode 0600; directory configurable via `MANIFOLD_DATA_DIR`, restore disabled via `MANIFOLD_NO_RESTORE=1`). The file may contain broker credentials, so protect the host.
 

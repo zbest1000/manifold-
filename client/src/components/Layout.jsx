@@ -114,7 +114,18 @@ export default function Layout() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="relative flex-1 overflow-hidden">
+        {!connected && (
+          // Global disconnect banner: every panel silently shows stale data
+          // while the socket is down, so the whole workspace says so loudly.
+          <div
+            role="alert"
+            className="absolute inset-x-0 top-0 z-50 flex items-center justify-center gap-2 bg-rose-600/90 px-4 py-1.5 text-xs font-medium text-white shadow-lg"
+          >
+            <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
+            Connection to the Manifold server lost — live data is stale. Reconnecting…
+          </div>
+        )}
         <Outlet />
       </main>
     </div>

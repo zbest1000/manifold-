@@ -75,9 +75,9 @@ export default function TopicGraph() {
   const [treeFilter, setTreeFilter] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [labelDensity, setLabelDensity] = useState(0.5); // 0 (off) .. 1 (dense)
-  const [forcePositions, setForcePositions] = useState(null); // server sfdp coords for show-all
+  const [forcePositions, setForcePositions] = useState(null); // worker-computed force coords for show-all
   const [forceBusy, setForceBusy] = useState(false);
-  const SFDP_MAX = 30000; // server-side sfdp node cap
+  const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
 
   // Select a topic from the tree, shaping it like a graph node so the shared
@@ -147,29 +147,46 @@ export default function TopicGraph() {
     if (coverage?.brokerId === brokerId) setView('graph');
   }, [coverage, brokerId]);
 
-  // A server-computed force layout is a snapshot for a specific node set — drop it
+  // A batch force layout is a snapshot for a specific node set — drop it
   // when the graph changes (new topics, collapse) so stale coordinates aren't
   // applied to different nodes; the view falls back to the radial layout.
   useEffect(() => {
     setForcePositions(null);
   }, [graph]);
 
-  const runForceLayout = useCallback(async () => {
-    if (graph.nodes.length > SFDP_MAX) {
-      toast.error(`Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes (this has ${graph.nodes.length.toLocaleString()}).`);
+  // Big-graph force layout, computed off the main thread in a Web Worker so the
+  // UI stays responsive. The worker is spawned per run and terminated after it
+  // posts back positions.
+  const runForceLayout = useCallback(() => {
+    if (graph.nodes.length > FORCE_MAX) {
+      toast.error(`Force layout supports up to ${FORCE_MAX.toLocaleString()} nodes (this has ${graph.nodes.length.toLocaleString()}).`);
       return;
     }
     setForceBusy(true);
     const t = toast.loading('Computing force layout…');
-    try {
-      const res = await api.computeLayout(graph, 'sfdp');
-      setForcePositions(res.positions);
-      toast.success(`Force layout: ${res.count.toLocaleString()} nodes`, { id: t });
-    } catch (err) {
-      toast.error(err.message || 'Layout failed', { id: t });
-    } finally {
+    const worker = new Worker(new URL('../graph/forceLayoutWorker.js', import.meta.url), { type: 'module' });
+    const finish = () => {
+      worker.terminate();
       setForceBusy(false);
-    }
+    };
+    worker.onmessage = (e) => {
+      const { positions, count, error } = e.data || {};
+      if (error || !positions) {
+        toast.error(error || 'Layout failed', { id: t });
+      } else {
+        setForcePositions(positions);
+        toast.success(`Force layout: ${count.toLocaleString()} nodes`, { id: t });
+      }
+      finish();
+    };
+    worker.onerror = () => {
+      toast.error('Layout failed', { id: t });
+      finish();
+    };
+    worker.postMessage({
+      nodes: graph.nodes.map((n) => ({ id: n.id })),
+      links: graph.links.map((l) => ({ source: l.source, target: l.target }))
+    });
   }, [graph]);
 
   // Live buffer snapshot, refreshed at the throttled tick (not per message).
@@ -312,7 +329,7 @@ export default function TopicGraph() {
                 <GraphToolbar
                   showFlow
                   onFit={() => graphRef.current?.fitTo()}
-                  onBeautify={() => setGraphLayout('balanced')}
+                  onBeautify={() => setGraphLayout('radial')}
                   onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), `topic-graph-${brokerId}.png`)}
                   onExportJson={() => downloadJson(graphRef.current?.exportGraph(), `topic-graph-${brokerId}.json`)}
                 />
@@ -379,11 +396,11 @@ export default function TopicGraph() {
                       <SegBtn
                         active={Boolean(forcePositions)}
                         onClick={runForceLayout}
-                        disabled={forceBusy || graph.nodes.length > SFDP_MAX}
+                        disabled={forceBusy || graph.nodes.length > FORCE_MAX}
                         title={
-                          graph.nodes.length > SFDP_MAX
-                            ? `Force layout supports up to ${SFDP_MAX.toLocaleString()} nodes`
-                            : 'Organic force-directed layout (server-computed sfdp)'
+                          graph.nodes.length > FORCE_MAX
+                            ? `Force layout supports up to ${FORCE_MAX.toLocaleString()} nodes`
+                            : 'Organic force-directed layout (computed in a Web Worker)'
                         }
                       >
                         {forceBusy ? <Loader2 size={12} className="animate-spin" /> : <Waypoints size={12} />}

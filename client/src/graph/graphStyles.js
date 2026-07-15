@@ -119,16 +119,7 @@ export const LAYOUTS = {
   tight: { id: 'tight', name: 'Tight', mode: 'force', charge: -120, linkDistance: 34, gravity: 0.09 },
   radial: { id: 'radial', name: 'Radial', mode: 'radial', charge: -160, linkDistance: 50, ringGap: 120 },
   tree: { id: 'tree', name: 'Tree', mode: 'tree', rowGap: 90, colGap: 46 },
-  cluster: { id: 'cluster', name: 'Cluster', mode: 'cluster', charge: -90, linkDistance: 40, clusterRadius: 260 },
-  // Server-computed batch layouts (Graphviz / Cytoscape) — best for static and
-  // hierarchical graphs. Coordinates are fetched from /api/layout and applied as
-  // fixed positions; physics is skipped. `engine` picks the algorithm.
-  hierarchy: { id: 'hierarchy', name: 'Hierarchy', mode: 'server', engine: 'dot', direction: 'TB', group: 'server' },
-  layered: { id: 'layered', name: 'Layered ←→', mode: 'server', engine: 'dot', direction: 'LR', group: 'server' },
-  balanced: { id: 'balanced', name: 'Balanced', mode: 'server', engine: 'fcose', group: 'server' },
-  radialG: { id: 'radialG', name: 'Radial+', mode: 'server', engine: 'twopi', group: 'server' },
-  circular: { id: 'circular', name: 'Circular', mode: 'server', engine: 'circo', group: 'server' },
-  scalable: { id: 'scalable', name: 'Scalable', mode: 'server', engine: 'sfdp', group: 'server' }
+  cluster: { id: 'cluster', name: 'Cluster', mode: 'cluster', charge: -90, linkDistance: 40, clusterRadius: 260 }
 };
 
 export const LAYOUT_LIST = Object.values(LAYOUTS);

@@ -14,7 +14,6 @@ import { zoom, zoomIdentity } from 'd3-zoom';
 import { drag } from 'd3-drag';
 import { GRAPH_STYLES, LAYOUTS } from './graphStyles';
 import { groupColor, PROTOCOL_COLORS } from './buildGraph';
-import { api } from '../lib/api';
 
 /**
  * Canvas node graph: pan/zoom, drag, hover, selection, live message-flow
@@ -359,52 +358,6 @@ const ForceGraph = forwardRef(function ForceGraph(
     if (simRef.current) simRef.current.stop();
 
     const depth = computeDepths(nodes, links);
-
-    // Server-computed batch layout (Graphviz dot/sfdp/twopi/circo, Cytoscape
-    // fcose): fetch coordinates from /api/layout and pin nodes to them, skipping
-    // physics. Seed with the deterministic radial tree so the graph isn't blank
-    // while the request is in flight; on failure fall back to that seed.
-    if (layout.mode === 'server') {
-      simRef.current = null;
-      let cancelled = false;
-      const settle = () => {
-        bigRef.current = nodes.length > 4000;
-        if (bigRef.current) buildGrid(nodes, gridRef);
-        requestAnimationFrame(() => draw());
-      };
-      if (nodes.some((n) => n.x == null)) radialTreeLayout(nodes, links, depth);
-      settle();
-
-      api.computeLayout(data, layout.engine, layout.direction)
-        .then((res) => {
-          if (cancelled) return;
-          const pos = res.positions || {};
-          let applied = 0;
-          for (const n of nodes) {
-            const p = pos[n.id];
-            if (p) {
-              n.x = p.x;
-              n.y = p.y;
-              n.fx = p.x;
-              n.fy = p.y;
-              applied++;
-            }
-          }
-          if (applied) {
-            settle();
-            fitTo();
-          }
-        })
-        .catch(() => {
-          if (cancelled) return;
-          radialTreeLayout(nodes, links, depth);
-          settle();
-        });
-
-      return () => {
-        cancelled = true;
-      };
-    }
 
     // Big / show-all graphs: skip physics entirely — a force sim on tens of
     // thousands of nodes is infeasible. Place nodes with a deterministic radial

@@ -1,22 +1,83 @@
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import * as THREE from 'three';
 import { GRAPH_STYLES } from './graphStyles';
 import { groupColor, PROTOCOL_COLORS } from './buildGraph';
 
 /**
- * 3D node graph rendered on a 2D canvas (no WebGL dependency). Nodes are placed
- * with a deterministic spherical-tree layout, projected with perspective, and
- * orbited with the mouse: drag to rotate around both axes, wheel to zoom. Nodes
- * are depth-sorted and faded so the structure reads clearly from any angle, and
- * you can rotate to reach any node.
+ * Real three.js 3D node graph. Nodes are placed with the deterministic
+ * spherical-tree layout, drawn as an InstancedMesh of low-poly spheres with
+ * per-instance color and degree-based scale, and links as a single
+ * LineSegments buffer. Drag orbits (yaw/pitch), wheel zooms, click selects.
+ * Rendering is on-demand: frames are only produced during/shortly after
+ * interaction, and the loop pauses while the tab is hidden.
  */
-const FOCAL = 900;
 const CAM_DIST = 950;
-const MAX_3D_NODES = 12000; // 3D projection + depth sort per frame stays smooth to here
+const FOV = 50;
+const MAX_3D_NODES = 50000; // GPU instancing keeps this smooth
+const LABEL_COUNT = 40; // sprite labels for the highest-degree nodes only
+const LINK_OPACITY = 0.35;
+const IDLE_MS = 2000; // keep the rAF loop alive this long after interaction
 
-/** Strip the alpha channel from an rgba() color (depth fading owns opacity here). */
+/** Strip the alpha channel from an rgba() color (link opacity is constant here). */
 function opaqueColor(color) {
   const m = /^rgba\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,[^)]+\)$/.exec(String(color).trim());
   return m ? `rgb(${m[1]},${m[2]},${m[3]})` : color;
+}
+
+/** Same node sizing rule as the 2D renderers. */
+function nodeRadius(n) {
+  return n.kind === 'broker' || n.kind === 'opcua-server' || n.kind === 'i3x-server'
+    ? 10
+    : 4 + Math.sqrt(n.degree || 0) * 1.6;
+}
+
+function truncateLabel(label) {
+  const s = String(label ?? '');
+  return s.length > 20 ? `${s.slice(0, 19)}…` : s;
+}
+
+/** Canvas-textured billboard label (halo + fill from the style's label colors). */
+function makeLabelSprite(text, labelStyle) {
+  const fontSize = 28;
+  const pad = 10;
+  const font = `600 ${fontSize}px Inter, sans-serif`;
+  const canvas = document.createElement('canvas');
+  let ctx = canvas.getContext('2d');
+  ctx.font = font;
+  const w = Math.max(2, Math.ceil(ctx.measureText(text).width) + pad * 2);
+  const h = fontSize + pad * 2;
+  canvas.width = w;
+  canvas.height = h;
+  ctx = canvas.getContext('2d');
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = labelStyle.halo;
+  ctx.strokeText(text, w / 2, h / 2);
+  ctx.fillStyle = labelStyle.color;
+  ctx.fillText(text, w / 2, h / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(material);
+  const worldH = 15; // world units; perspective scales it with distance
+  sprite.scale.set(worldH * (w / h), worldH, 1);
+  return sprite;
+}
+
+function positionLabel(sprite, n) {
+  sprite.position.set(n.x, n.y + nodeRadius(n) + 10, n.z);
+}
+
+function disposeObject(obj) {
+  if (obj.geometry) obj.geometry.dispose();
+  const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+  for (const m of mats) {
+    if (m.map) m.map.dispose();
+    m.dispose();
+  }
 }
 
 const ForceGraph3D = forwardRef(function ForceGraph3D(
@@ -25,16 +86,15 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
 ) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
+  const threeRef = useRef(null); // { renderer, scene, camera, rotGroup, requestRender }
+  const objsRef = useRef(null); // per-dataset scene objects (rebuilt when data/style change)
   const nodesRef = useRef([]);
-  const linksRef = useRef([]);
   const byIdRef = useRef(new Map());
-  const projRef = useRef([]); // cached screen projections for hit-testing
-  const dprRef = useRef(1);
-  const sizeRef = useRef({ w: 0, h: 0 });
   const rotRef = useRef({ yaw: 0.6, pitch: -0.35 });
   const zoomRef = useRef(1);
-  const hoverRef = useRef(null);
-  const drawRef = useRef(() => {});
+  const selSpriteRef = useRef(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   const style = GRAPH_STYLES[styleId] || GRAPH_STYLES.constellation;
   const colorFor = useCallback(
@@ -44,179 +104,109 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
 
   const capped = data && data.nodes.length > MAX_3D_NODES;
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const dpr = dprRef.current;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = style.background;
-    ctx.fillRect(0, 0, width, height);
-
-    const nodes = nodesRef.current;
-    const links = linksRef.current;
-    const byId = byIdRef.current;
-    const cx = width / 2;
-    const cy = height / 2;
-    const zoom = zoomRef.current;
-    const { yaw, pitch } = rotRef.current;
-    const cosY = Math.cos(yaw);
-    const sinY = Math.sin(yaw);
-    const cosX = Math.cos(pitch);
-    const sinX = Math.sin(pitch);
-
-    // Project every node into screen space (and cache for hit-testing).
-    const proj = new Map();
-    for (const n of nodes) {
-      const x1 = n.x * cosY + n.z * sinY;
-      const z1 = -n.x * sinY + n.z * cosY;
-      const y2 = n.y * cosX - z1 * sinX;
-      const z2 = n.y * sinX + z1 * cosX;
-      const zc = z2 + CAM_DIST;
-      if (zc < 1) continue;
-      const scale = (FOCAL / zc) * zoom;
-      proj.set(n.id, { sx: cx + x1 * scale, sy: cy + y2 * scale, scale, zc });
-    }
-    projRef.current = [];
-
-    const hover = hoverRef.current;
-
-    // Links first (behind nodes), faded by average endpoint depth. Styles
-    // carry translucent link colors tuned for the 2D renderer — compounding
-    // that with a second flat alpha here left 3D links at ~5% opacity
-    // (invisible), so strip the color's own alpha and let depth own the fade.
-    const linkColor = opaqueColor(style.link.color);
-    ctx.lineWidth = 1;
-    for (const l of links) {
-      const a = proj.get(l.source);
-      const b = proj.get(l.target);
-      if (!a || !b) continue;
-      const active = hover && (l.source === hover || l.target === hover);
-      if (active) {
-        ctx.globalAlpha = 0.9;
-        ctx.strokeStyle = style.linkHighlight;
-      } else {
-        const depth = Math.max(0, Math.min(1, 1.4 - ((a.zc + b.zc) / 2 - CAM_DIST + 400) / 1400));
-        ctx.globalAlpha = 0.15 + depth * 0.3; // 0.15 far → 0.45 near
-        ctx.strokeStyle = linkColor;
-      }
-      ctx.beginPath();
-      ctx.moveTo(a.sx, a.sy);
-      ctx.lineTo(b.sx, b.sy);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-
-    // Nodes far→near so nearer ones paint on top.
-    const drawList = [];
-    for (const n of nodes) {
-      const p = proj.get(n.id);
-      if (!p) continue;
-      drawList.push({ n, p });
-    }
-    drawList.sort((a, b) => b.p.zc - a.p.zc);
-
-    const showLabels = zoom >= 0.9;
-    for (const { n, p } of drawList) {
-      const baseR = n.kind === 'broker' || n.kind === 'opcua-server' || n.kind === 'i3x-server' ? 10 : 4 + Math.sqrt(n.degree || 0) * 1.6;
-      const r = Math.max(1, baseR * p.scale);
-      // Depth cue: fade nodes that are farther from the camera.
-      const depthAlpha = Math.max(0.25, Math.min(1, 1.4 - (p.zc - CAM_DIST + 400) / 1400));
-      const color = colorFor(n);
-      const dim = hover && hover !== n.id;
-
-      projRef.current.push({ id: n.id, sx: p.sx, sy: p.sy, r: r + 4, zc: p.zc });
-
-      ctx.globalAlpha = dim ? depthAlpha * 0.4 : depthAlpha;
-      if (style.node.glow && r > 2) {
-        ctx.shadowColor = color;
-        ctx.shadowBlur = Math.min(16, r * 1.5);
-      }
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      if (n.id === selectedId) {
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = style.selectedRing;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, r + 4, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      if (showLabels && r > 5 && !dim) {
-        ctx.globalAlpha = depthAlpha;
-        ctx.font = '11px Inter, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        const label = n.label.length > 20 ? `${n.label.slice(0, 19)}…` : n.label;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = style.label.halo;
-        ctx.strokeText(label, p.sx, p.sy + r + 2);
-        ctx.fillStyle = style.label.color;
-        ctx.fillText(label, p.sx, p.sy + r + 2);
-      }
-    }
-    ctx.globalAlpha = 1;
-  }, [style, selectedId, colorFor]);
-
-  useEffect(() => {
-    drawRef.current = draw;
-    draw();
-  }, [draw]);
-
-  // Layout when data changes.
-  useEffect(() => {
-    if (!data) return;
-    const nodes = data.nodes.slice(0, MAX_3D_NODES).map((n) => ({ ...n }));
-    const keep = new Set(nodes.map((n) => n.id));
-    const links = data.links.filter((l) => keep.has(l.source) && keep.has(l.target)).map((l) => ({ ...l }));
-    sphericalTreeLayout(nodes, links);
-    nodesRef.current = nodes;
-    linksRef.current = links;
-    byIdRef.current = new Map(nodes.map((n) => [n.id, n]));
-    draw();
-  }, [data, draw]);
-
-  useImperativeHandle(ref, () => ({
-    resetView: () => {
-      rotRef.current = { yaw: 0.6, pitch: -0.35 };
-      zoomRef.current = 1;
-      draw();
-    }
-  }), [draw]);
-
-  // Canvas sizing + orbit / zoom / pick wiring.
+  // Renderer / camera / controls — created once.
   useEffect(() => {
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
-    if (!canvas || !wrap) return;
+    if (!canvas || !wrap) return undefined;
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(FOV, 1, 1, 20000);
+    camera.position.set(0, 0, CAM_DIST);
+    // Everything orbits by rotating this group; the camera only moves along z for zoom.
+    const rotGroup = new THREE.Group();
+    scene.add(rotGroup);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    dirLight.position.set(0.5, 1, 2);
+    scene.add(dirLight);
+    const raycaster = new THREE.Raycaster();
+
+    // On-demand render loop: run only while interacting (plus a short tail).
+    let raf = 0;
+    let lastActive = 0;
+    const renderFrame = () => {
+      const rot = rotRef.current;
+      rotGroup.rotation.set(rot.pitch, rot.yaw, 0); // Rx(pitch) ∘ Ry(yaw), same as the old projection
+      camera.position.z = CAM_DIST / zoomRef.current;
+      renderer.render(scene, camera);
+    };
+    const loop = () => {
+      raf = 0;
+      renderFrame();
+      if (performance.now() - lastActive < IDLE_MS && !document.hidden) raf = requestAnimationFrame(loop);
+    };
+    const requestRender = (sustain = false) => {
+      if (sustain) lastActive = performance.now();
+      if (!raf && !document.hidden) raf = requestAnimationFrame(loop);
+    };
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      dprRef.current = dpr;
       const { width, height } = wrap.getBoundingClientRect();
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      sizeRef.current = { w: width, h: height };
-      drawRef.current();
+      if (!width || !height) return;
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setSize(width, height);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      requestRender();
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+      } else {
+        requestRender();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Analytic ray-sphere picking in layout space — much faster than
+    // raycasting 50k instanced sphere geometries triangle-by-triangle.
+    const ndc = new THREE.Vector2();
+    const sphere = new THREE.Sphere();
+    const hitPoint = new THREE.Vector3();
+    const invWorld = new THREE.Matrix4();
+    const localRay = new THREE.Ray();
+    const pick = (e) => {
+      const objs = objsRef.current;
+      if (!objs) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      camera.position.z = CAM_DIST / zoomRef.current;
+      camera.updateMatrixWorld();
+      raycaster.setFromCamera(ndc, camera);
+      rotGroup.rotation.set(rotRef.current.pitch, rotRef.current.yaw, 0);
+      rotGroup.updateMatrixWorld();
+      invWorld.copy(rotGroup.matrixWorld).invert();
+      localRay.copy(raycaster.ray).applyMatrix4(invWorld);
+      const { positions, radii } = objs;
+      let best = -1;
+      let bestD = Infinity;
+      for (let i = 0; i < radii.length; i++) {
+        sphere.center.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+        sphere.radius = radii[i] + 1.5;
+        if (localRay.intersectSphere(sphere, hitPoint)) {
+          const d = hitPoint.distanceToSquared(localRay.origin);
+          if (d < bestD) {
+            bestD = d;
+            best = i;
+          }
+        }
+      }
+      return best >= 0 ? nodesRef.current[best] : null;
+    };
+
     let dragging = false;
     let moved = 0;
     let lastX = 0;
     let lastY = 0;
-
     const onDown = (e) => {
       dragging = true;
       moved = 0;
@@ -225,76 +215,193 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       canvas.style.cursor = 'grabbing';
     };
     const onMove = (e) => {
-      if (dragging) {
-        const dx = e.clientX - lastX;
-        const dy = e.clientY - lastY;
-        lastX = e.clientX;
-        lastY = e.clientY;
-        moved += Math.abs(dx) + Math.abs(dy);
-        const rot = rotRef.current;
-        rot.yaw += dx * 0.008;
-        rot.pitch += dy * 0.008;
-        rot.pitch = Math.max(-1.5, Math.min(1.5, rot.pitch));
-        drawRef.current();
-      } else {
-        // hover pick
-        const hit = pick(e);
-        const id = hit ? hit.id : null;
-        if (id !== hoverRef.current) {
-          hoverRef.current = id;
-          canvas.style.cursor = id ? 'pointer' : 'grab';
-          drawRef.current();
-        }
-      }
+      if (!dragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      moved += Math.abs(dx) + Math.abs(dy);
+      const rot = rotRef.current;
+      rot.yaw += dx * 0.008;
+      rot.pitch = Math.max(-1.5, Math.min(1.5, rot.pitch + dy * 0.008));
+      requestRender(true);
     };
     const onUp = (e) => {
       canvas.style.cursor = 'grab';
       if (dragging && moved < 5) {
-        const hit = pick(e);
-        if (hit && onSelect) {
-          const node = byIdRef.current.get(hit.id);
-          if (node) onSelect(node);
-        }
+        const node = pick(e);
+        if (node && onSelectRef.current) onSelectRef.current(node);
       }
       dragging = false;
     };
     const onWheel = (e) => {
       e.preventDefault();
-      const z = zoomRef.current * (e.deltaY < 0 ? 1.12 : 0.89);
-      zoomRef.current = Math.max(0.15, Math.min(6, z));
-      drawRef.current();
+      zoomRef.current = Math.max(0.15, Math.min(6, zoomRef.current * (e.deltaY < 0 ? 1.12 : 0.89)));
+      requestRender(true);
     };
-
-    const pick = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      let best = null;
-      let bestZ = Infinity;
-      for (const p of projRef.current) {
-        const d = (p.sx - mx) ** 2 + (p.sy - my) ** 2;
-        if (d <= p.r * p.r && p.zc < bestZ) {
-          best = p;
-          bestZ = p.zc;
-        }
-      }
-      return best;
-    };
-
+    canvas.style.cursor = 'grab';
     canvas.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
 
+    threeRef.current = { renderer, scene, camera, rotGroup, requestRender };
+    requestRender();
+
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       canvas.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
+      threeRef.current = null;
+      renderer.dispose();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Build the scene graph when data / style / coloring change.
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three || !data) return undefined;
+
+    const nodes = data.nodes.slice(0, MAX_3D_NODES).map((n) => ({ ...n }));
+    const keep = new Set(nodes.map((n) => n.id));
+    const links = data.links.filter((l) => keep.has(l.source) && keep.has(l.target)).map((l) => ({ ...l }));
+    sphericalTreeLayout(nodes, links);
+    nodesRef.current = nodes;
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    byIdRef.current = byId;
+
+    const { scene, rotGroup, requestRender } = three;
+    scene.background = new THREE.Color(style.background);
+
+    const group = new THREE.Group();
+
+    // Nodes: one instanced low-poly sphere with per-instance color + scale.
+    const nodeGeo = new THREE.SphereGeometry(1, 12, 8);
+    const nodeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const nodeMesh = new THREE.InstancedMesh(nodeGeo, nodeMat, Math.max(1, nodes.length));
+    nodeMesh.count = nodes.length;
+    const m4 = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    const col = new THREE.Color();
+    const positions = new Float32Array(nodes.length * 3);
+    const radii = new Float32Array(nodes.length);
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const r = nodeRadius(n);
+      positions[i * 3] = n.x;
+      positions[i * 3 + 1] = n.y;
+      positions[i * 3 + 2] = n.z;
+      radii[i] = r;
+      pos.set(n.x, n.y, n.z);
+      scl.set(r, r, r);
+      nodeMesh.setMatrixAt(i, m4.compose(pos, quat, scl));
+      nodeMesh.setColorAt(i, col.set(colorFor(n)));
+    }
+    nodeMesh.instanceMatrix.needsUpdate = true;
+    if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
+    group.add(nodeMesh);
+
+    // Links: a single LineSegments buffer with constant opacity.
+    if (links.length > 0) {
+      const linePos = new Float32Array(links.length * 6);
+      let j = 0;
+      for (const l of links) {
+        const a = byId.get(l.source);
+        const b = byId.get(l.target);
+        linePos[j++] = a.x;
+        linePos[j++] = a.y;
+        linePos[j++] = a.z;
+        linePos[j++] = b.x;
+        linePos[j++] = b.y;
+        linePos[j++] = b.z;
+      }
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+      const lineMat = new THREE.LineBasicMaterial({
+        color: new THREE.Color(opaqueColor(style.link.color)),
+        transparent: true,
+        opacity: LINK_OPACITY,
+        depthWrite: false
+      });
+      group.add(new THREE.LineSegments(lineGeo, lineMat));
+    }
+
+    // Labels: sprites for the highest-degree nodes only (text is expensive).
+    const labelGroup = new THREE.Group();
+    const labeled = new Set();
+    const byDegree = nodes.slice().sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, LABEL_COUNT);
+    for (const n of byDegree) {
+      if (!n.label) continue;
+      const sprite = makeLabelSprite(truncateLabel(n.label), style.label);
+      positionLabel(sprite, n);
+      labelGroup.add(sprite);
+      labeled.add(n.id);
+    }
+    group.add(labelGroup);
+
+    // Selection highlight: a wireframe shell scaled around the selected node.
+    const highlight = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 12),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(style.selectedRing), wireframe: true, transparent: true, opacity: 0.9 })
+    );
+    highlight.visible = false;
+    group.add(highlight);
+
+    rotGroup.add(group);
+    objsRef.current = { group, labelGroup, highlight, labeled, positions, radii };
+    requestRender();
+
+    return () => {
+      rotGroup.remove(group);
+      group.traverse(disposeObject);
+      selSpriteRef.current = null;
+      objsRef.current = null;
+    };
+  }, [data, style, colorFor]);
+
+  // Apply selection: move the highlight shell and label the selected node.
+  useEffect(() => {
+    const three = threeRef.current;
+    const objs = objsRef.current;
+    if (!three || !objs) return;
+    const { highlight, labelGroup, labeled } = objs;
+
+    if (selSpriteRef.current) {
+      labelGroup.remove(selSpriteRef.current);
+      disposeObject(selSpriteRef.current);
+      selSpriteRef.current = null;
+    }
+
+    const node = selectedId != null ? byIdRef.current.get(selectedId) : null;
+    if (node) {
+      highlight.visible = true;
+      highlight.position.set(node.x, node.y, node.z);
+      highlight.scale.setScalar(nodeRadius(node) + 3);
+      if (node.label && !labeled.has(node.id)) {
+        const sprite = makeLabelSprite(truncateLabel(node.label), style.label);
+        positionLabel(sprite, node);
+        labelGroup.add(sprite);
+        selSpriteRef.current = sprite;
+      }
+    } else {
+      highlight.visible = false;
+    }
+    three.requestRender();
+  }, [selectedId, data, style, colorFor]);
+
+  useImperativeHandle(ref, () => ({
+    resetView: () => {
+      rotRef.current = { yaw: 0.6, pitch: -0.35 };
+      zoomRef.current = 1;
+      if (threeRef.current) threeRef.current.requestRender();
+    }
+  }), []);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full overflow-hidden">

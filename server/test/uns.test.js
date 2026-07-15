@@ -190,6 +190,73 @@ test('lint: whitespace in segment names is flagged; $SYS is ignored', () => {
   assert.ok(!r.findings.some((x) => x.path.startsWith('$SYS')));
 });
 
+// ---- custom UNS icons API ----------------------------------------------------
+
+test('uns icons API: POST validates name and path data, list/delete round-trip', async () => {
+  const express = require('express');
+  const fsMod = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const ProfileStore = require('../services/profileStore');
+  const unsRoutes = require('../routes/uns');
+
+  const app = express();
+  app.use(express.json());
+  app.locals.services = { profiles: new ProfileStore(fsMod.mkdtempSync(path.join(os.tmpdir(), 'manifold-icons-test-'))) };
+  app.use('/api/uns', unsRoutes);
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = async (body) => {
+    const res = await fetch(`${base}/api/uns/icons`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  try {
+    // bad names
+    assert.strictEqual((await post({ name: 'Bad_Name', svgPath: 'M0 0 L24 24' })).status, 400);
+    assert.strictEqual((await post({ name: 'x'.repeat(41), svgPath: 'M0 0' })).status, 400);
+    assert.strictEqual((await post({ svgPath: 'M0 0' })).status, 400);
+    // bad path data: markup, urls, scripts, empty, oversized
+    assert.strictEqual((await post({ name: 'evil', svgPath: '<script>alert(1)</script>' })).status, 400);
+    assert.strictEqual((await post({ name: 'evil', svgPath: 'M0 0 url(http://x)' })).status, 400);
+    assert.strictEqual((await post({ name: 'evil', svgPath: '   ' })).status, 400);
+    assert.strictEqual((await post({ name: 'evil', svgPath: `M0 0 ${'L1 1 '.repeat(800)}` })).status, 400);
+
+    // valid create
+    const created = await post({ name: 'my-tank', svgPath: 'M4 6a8 3 0 0 1 16 0v12a8 3 0 0 1-16 0z' });
+    assert.strictEqual(created.status, 201);
+    assert.ok(created.body.id);
+    assert.strictEqual(created.body.name, 'my-tank');
+
+    // upsert by name keeps the same id
+    const updated = await post({ name: 'my-tank', svgPath: 'M2 2 L22 22' });
+    assert.strictEqual(updated.status, 200);
+    assert.strictEqual(updated.body.id, created.body.id);
+    assert.strictEqual(updated.body.svgPath, 'M2 2 L22 22');
+
+    // list round-trip
+    const list = await (await fetch(`${base}/api/uns/icons`)).json();
+    assert.strictEqual(list.icons.length, 1);
+    assert.deepStrictEqual(list.icons[0], { name: 'my-tank', svgPath: 'M2 2 L22 22', id: created.body.id });
+
+    // delete
+    const del = await fetch(`${base}/api/uns/icons/${created.body.id}`, { method: 'DELETE' });
+    assert.strictEqual(del.status, 200);
+    const empty = await (await fetch(`${base}/api/uns/icons`)).json();
+    assert.strictEqual(empty.icons.length, 0);
+    const delMissing = await fetch(`${base}/api/uns/icons/${created.body.id}`, { method: 'DELETE' });
+    assert.strictEqual(delMissing.status, 404);
+  } finally {
+    server.close();
+  }
+});
+
 test('lint: findings truncate but per-rule counts stay exact', () => {
   const topics = [];
   for (let i = 0; i < 40; i++) topics.push(`p/b${i}//x`);

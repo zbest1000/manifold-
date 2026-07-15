@@ -20,15 +20,6 @@
  *   on plain Postgres that call fails harmlessly and the table still works.
  *   Config: { type:'timescaledb', host, port?, database, user, password?,
  *   ssl?, table? }.
- * - `timebase-ce`: FINOS TimeBase CE via the TimebaseWS web gateway
- *   (github.com/epam/TimebaseWS, default port 8099). Messages POST to
- *   `/api/v0/{stream}/write` as JSON rows { $type, symbol, timestamp, ... };
- *   the path is overridable (`writePath`) because gateway versions differ —
- *   confirm on your instance's Swagger at `/api/v0/docs`. Auth: none (common
- *   for CE quickstarts) or Deltix API-key signing (X-Deltix-ApiKey +
- *   X-Deltix-Signature = Base64(HmacSHA384(method+path+query+body, secret))).
- *   Config: { type:'timebase-ce', url, stream, messageType?, writePath?,
- *   apiKey?, apiSecret? }.
  * - `timebase`: Timebase historian (Flow Software) public REST API — TVQ
  *   writes into a dataset (datasets auto-create on first write; the historian
  *   ignores TVQs older than a tag's newest point). Default endpoint follows
@@ -130,53 +121,6 @@ async function timebaseWrite(conn, points, fetchImpl) {
   return { written: points.length };
 }
 
-// ---- FINOS TimeBase CE (TimebaseWS gateway) ----------------------------------
-
-const crypto = require('crypto');
-
-function deltixHeaders(conn, method, pathWithQuery, body) {
-  if (!conn.apiKey) return {};
-  // Payload per TimebaseWS api-keys guide: method + path + query + body.
-  const signature = crypto
-    .createHmac('sha384', conn.apiSecret || '')
-    .update(`${method.toUpperCase()}${pathWithQuery}${body}`)
-    .digest('base64');
-  return { 'X-Deltix-ApiKey': conn.apiKey, 'X-Deltix-Signature': signature };
-}
-
-async function timebaseCeWrite(conn, points, fetchImpl) {
-  const base = String(conn.url || '').replace(/\/+$/, '');
-  if (!base) throw new Error('timebase-ce url is required');
-  if (!conn.stream) throw new Error('timebase-ce stream is required');
-
-  const path = conn.writePath || `/api/v0/${encodeURIComponent(conn.stream)}/write`;
-  const $type = conn.messageType || 'ManifoldSample';
-  const body = JSON.stringify(
-    points.map((p) => ({
-      $type,
-      symbol: p.tag,
-      timestamp: new Date(p.ts).toISOString(),
-      value: typeof p.value === 'number' ? p.value : Number(p.value),
-      raw: typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value),
-      quality: p.quality ?? 192
-    }))
-  );
-
-  const res = await fetchImpl(`${base}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...deltixHeaders(conn, 'POST', path, body)
-    },
-    body
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`timebase-ce write failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
-  }
-  return { written: points.length };
-}
-
 // ---- TimescaleDB / PostgreSQL ------------------------------------------------
 
 let PgPool = null; // lazy — the pg driver only loads if a timescaledb historian exists
@@ -268,7 +212,7 @@ async function closePools() {
   pgPools.clear();
 }
 
-const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, timescaledb: timescaleWrite, 'timebase-ce': timebaseCeWrite };
+const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, timescaledb: timescaleWrite };
 
 async function writePoints(conn = {}, points = [], fetchImpl = globalThis.fetch) {
   const backend = BACKENDS[conn.type];

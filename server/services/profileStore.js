@@ -5,7 +5,7 @@ const path = require('path');
 
 // DataOps collections stored alongside connection profiles. Generic CRUD keeps
 // the store from growing three near-identical method triples per module.
-const COLLECTIONS = ['historians', 'pipelines', 'models', 'recordings', 'contracts', 'bindings'];
+const COLLECTIONS = ['historians', 'pipelines', 'models', 'recordings', 'contracts', 'bindings', 'icons'];
 function emptyCollections() {
   return Object.fromEntries(COLLECTIONS.map((c) => [c, {}]));
 }

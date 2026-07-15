@@ -20,9 +20,9 @@ import ViewTab from '@/components/ViewTab';
 export default function I3x() {
   const graphStyle = useStore((s) => s.graphStyle);
   const showMinimap = useStore((s) => s.showMinimap);
-  // i3X object graphs are hierarchical (parentId) — default to server `dot`,
-  // kept per-view so it doesn't override the MQTT graph's layout preference.
-  const [graphLayout, setGraphLayout] = useState('hierarchy');
+  // i3X object graphs are hierarchical (parentId) — default to the client
+  // `tree` layout, kept per-view so it doesn't override the MQTT graph's pref.
+  const [graphLayout, setGraphLayout] = useState('tree');
   const [matchIds, setMatchIds] = useState(null);
   const [view, setView] = useState('graph');
   const [treeFilter, setTreeFilter] = useState('');

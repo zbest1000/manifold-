@@ -28,9 +28,9 @@ export default function OpcUa() {
   const showValues = useStore((s) => s.showValues);
   const showMinimap = useStore((s) => s.showMinimap);
 
-  // OPC UA address spaces are strictly hierarchical — default to the server
-  // `dot` layout (kept per-view so it doesn't override the MQTT graph's pref).
-  const [graphLayout, setGraphLayout] = useState('hierarchy');
+  // OPC UA address spaces are strictly hierarchical — default to the client
+  // `tree` layout (kept per-view so it doesn't override the MQTT graph's pref).
+  const [graphLayout, setGraphLayout] = useState('tree');
   const [connectionId, setConnectionId] = useState(null);
   const [expanded, setExpanded] = useState(new Map()); // nodeId -> references
   const [selected, setSelected] = useState(null);

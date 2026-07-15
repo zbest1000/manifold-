@@ -70,7 +70,7 @@ export default function GraphToolbar({
         {onBeautify && (
           <button
             onClick={onBeautify}
-            title="Beautify layout (server-computed clustering)"
+            title="Beautify layout (radial arrangement)"
             className="flex items-center gap-1.5 rounded-xl border border-accent-500/40 bg-accent-500/10 px-2.5 py-2 text-sm text-accent-200 backdrop-blur transition hover:border-accent-500/70"
           >
             <Sparkles size={15} />
@@ -131,25 +131,12 @@ export default function GraphToolbar({
             ))}
           </div>
 
-          <p className="mb-2 mt-4 px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Layout · Live physics</p>
+          <p className="mb-2 mt-4 px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Layout</p>
           <div className="grid grid-cols-3 gap-2">
-            {LAYOUT_LIST.filter((l) => l.group !== 'server').map((layout) => (
+            {LAYOUT_LIST.map((layout) => (
               <LayoutButton key={layout.id} layout={layout} active={layout.id === currentLayout} onClick={() => chooseLayout(layout.id)} icon={Shuffle} />
             ))}
           </div>
-
-          <p className="mb-2 mt-4 flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            <Sparkles size={12} className="text-accent-400" />
-            Layout · Computed
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            {LAYOUT_LIST.filter((l) => l.group === 'server').map((layout) => (
-              <LayoutButton key={layout.id} layout={layout} active={layout.id === currentLayout} onClick={() => chooseLayout(layout.id)} icon={Sparkles} />
-            ))}
-          </div>
-          <p className="mt-2 px-1 text-[10px] leading-tight text-slate-500">
-            Computed layouts use Graphviz &amp; Cytoscape on the server for clean hierarchy and clustering — best for OPC UA / i3X and a one-shot "beautify" of the topic graph.
-          </p>
         </div>
       )}
     </div>
