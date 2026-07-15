@@ -11,6 +11,6 @@
 
 **Repo docs**
 
-- [README](https://github.com/zbest1000/Mqtt_explore#readme)
-- [Architecture](https://github.com/zbest1000/Mqtt_explore/blob/main/ARCHITECTURE.md)
-- [Docker stack](https://github.com/zbest1000/Mqtt_explore/blob/main/DOCKER.md)
+- [README](https://github.com/zbest1000/manifold#readme)
+- [Architecture](https://github.com/zbest1000/manifold/blob/main/ARCHITECTURE.md)
+- [Docker stack](https://github.com/zbest1000/manifold/blob/main/DOCKER.md)

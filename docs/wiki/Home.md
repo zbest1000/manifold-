@@ -4,9 +4,9 @@ Operational guides for running Manifold: connecting sources, delivering to
 historians, and operating the platform. Design documentation lives in the
 repository itself:
 
-- [README](https://github.com/zbest1000/Mqtt_explore#readme) — overview and quick start
-- [ARCHITECTURE.md](https://github.com/zbest1000/Mqtt_explore/blob/main/ARCHITECTURE.md) — system design, hot path, API surface, testing
-- [DOCKER.md](https://github.com/zbest1000/Mqtt_explore/blob/main/DOCKER.md) — one-command demo stack
+- [README](https://github.com/zbest1000/manifold#readme) — overview and quick start
+- [ARCHITECTURE.md](https://github.com/zbest1000/manifold/blob/main/ARCHITECTURE.md) — system design, hot path, API surface, testing
+- [DOCKER.md](https://github.com/zbest1000/manifold/blob/main/DOCKER.md) — one-command demo stack
 
 ## Guides
 
@@ -20,6 +20,6 @@ repository itself:
 | [Operations](Operations) | Auth and roles, audit, Prometheus metrics, config as code, alerts |
 | [Troubleshooting](Troubleshooting) | Symptoms, causes, fixes |
 
-These pages are generated from [`docs/wiki/`](https://github.com/zbest1000/Mqtt_explore/tree/main/docs/wiki)
+These pages are generated from [`docs/wiki/`](https://github.com/zbest1000/manifold/tree/main/docs/wiki)
 in the repository — edit there, not here, or changes will be overwritten by
 the next sync.
