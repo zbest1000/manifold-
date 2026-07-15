@@ -32,6 +32,18 @@ docker compose up --build
 # open http://localhost:5000
 ```
 
+## Option C — prebuilt image
+
+Just Manifold, no demo services — published to GHCR on every release:
+
+```bash
+docker run -p 5000:5000 -v manifold-data:/data ghcr.io/zbest1000/manifold:latest
+# open http://localhost:5000
+```
+
+The volume at `/data` keeps profiles, history, and the OPC UA PKI across
+container restarts. See [Operations](Operations) for tokens and hardening.
+
 ## Your first broker
 
 ```mermaid
@@ -62,9 +74,10 @@ flowchart LR
 | `PORT` | HTTP/socket port (default 5000) |
 | `MANIFOLD_AUTH_TOKEN` | Admin bearer token; enables auth on API + socket |
 | `MANIFOLD_VIEWER_TOKEN` | Optional read-only token |
-| `MANIFOLD_DATA_DIR` | Data directory (profiles, history, outbox spill, audit) |
+| `MANIFOLD_TOKENS` | Named tokens: `name:token:role,...` (roles `admin`/`viewer`) — see [Operations](Operations) |
+| `MANIFOLD_DATA_DIR` | Data directory (profiles, history, outbox spill, audit, OPC UA PKI) |
 | `MANIFOLD_NO_RESTORE` | `1` = don't reconnect saved profiles on boot |
-| `CLIENT_URL` | CORS origin for the dev client |
+| `CLIENT_URL` | Allowed CORS origin (default `http://localhost:3000`) |
 
 ## Where to next
 

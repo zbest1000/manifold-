@@ -15,3 +15,4 @@
 - 📖 [README](https://github.com/zbest1000/manifold#readme)
 - 🏗️ [Architecture](https://github.com/zbest1000/manifold/blob/main/ARCHITECTURE.md)
 - 🐳 [Docker stack](https://github.com/zbest1000/manifold/blob/main/DOCKER.md)
+- 📝 [Changelog](https://github.com/zbest1000/manifold/blob/main/CHANGELOG.md)

@@ -94,6 +94,16 @@ jobs:
           POSTGRES_DB: manifold
           POSTGRES_USER: manifold
           POSTGRES_PASSWORD: ci-password
+      timebase:
+        # Flow Software's Timebase historian (the `timebase` backend in
+        # server/services/historians.js). Free product: runs headless with no
+        # license acceptance, env vars, or credentials — the REST API on 4511
+        # is unauthenticated by default (4512 is only the HTTPS listener, not
+        # needed here). 1.3.4 pinned = Docker Hub's current `latest`.
+        # Docs: https://timebase.flow-software.com/en/knowledge-base/quick-start-for-docker
+        image: timebase/historian:1.3.4
+        ports:
+          - 4511:4511
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -114,6 +124,10 @@ jobs:
           curl -fsS http://127.0.0.1:8086/health || { echo "::error::influxdb never became healthy"; exit 1; }
           wait_port emqx 1883
           wait_port timescaledb 5432
+          # Timebase readiness = its REST API answers, not just the socket:
+          # GET /api/datasets is the cheapest documented endpoint.
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4511/api/datasets && break; sleep 2; done
+          curl -fsS http://127.0.0.1:4511/api/datasets || { echo "::error::timebase never became healthy"; exit 1; }
       - name: Run real-service integration tests
         working-directory: server
         env:

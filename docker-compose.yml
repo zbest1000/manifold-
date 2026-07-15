@@ -11,7 +11,7 @@
 services:
   mqtt:
     image: eclipse-mosquitto:2
-    container_name: tc-mqtt
+    container_name: manifold-mqtt
     hostname: mqtt
     restart: unless-stopped
     volumes:
@@ -28,7 +28,7 @@ services:
 
   opcua:
     image: mcr.microsoft.com/iotedge/opc-plc:latest
-    container_name: tc-opcua
+    container_name: manifold-opcua
     hostname: opcua
     restart: unless-stopped
     command:
@@ -42,7 +42,7 @@ services:
   simulator:
     build:
       context: ./docker/simulator
-    container_name: tc-simulator
+    container_name: manifold-simulator
     restart: unless-stopped
     environment:
       MQTT_URL: mqtt://mqtt:1883
@@ -55,7 +55,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
-    container_name: tc-app
+    container_name: manifold-app
     restart: unless-stopped
     environment:
       NODE_ENV: production

@@ -1,5 +1,5 @@
 {
-  "name": "tc-simulator",
+  "name": "manifold-simulator",
   "version": "1.0.0",
   "private": true,
   "description": "Publishes demo MQTT + Sparkplug B traffic for Manifold",

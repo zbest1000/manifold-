@@ -72,3 +72,23 @@ sequenceDiagram
 
 > ✅ This lifecycle is exercised frame-by-frame against a real broker in CI —
 > BIRTH ordering, sequence numbering, and death certificates included.
+
+## Host application STATE
+
+Sparkplug host applications announce themselves on retained
+`spBv1.0/STATE/{host_id}` topics. Manifold works with STATE in both
+directions:
+
+- **Tracking** — every STATE message folds into the registry: host
+  online/offline status appears in the Tags page and in the UNS event feed
+  (`host-online` / `host-offline`). Because STATE is retained, status is
+  correct immediately after connecting.
+- **Publishing** — the *Primary host STATE* panel on the Tags page starts a
+  dedicated session that publishes retained `{ "online": true, ... }` for a
+  host ID of your choice, with a matching last-will. Edge nodes configured to
+  wait for a primary host (a common Ignition/edge gateway setting) then see
+  one and start publishing.
+
+> 💡 Only run one primary host per host ID on a broker — that is the
+> specification's whole point. Manifold refuses nothing here; the convention
+> is yours to keep.

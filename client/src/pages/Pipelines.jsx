@@ -720,7 +720,7 @@ function HistoriansTab() {
                 <Input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={editingId ? 'unchanged' : undefined} />
               </Field>
               <Field label="Write path (optional)" className="col-span-2">
-                <Input value={form.writePath} onChange={(e) => setForm({ ...form, writePath: e.target.value })} placeholder="/api/tags/data — confirm on your instance's :4511/api/help" />
+                <Input value={form.writePath} onChange={(e) => setForm({ ...form, writePath: e.target.value })} placeholder="default: /api/datasets/{dataset}/data" />
               </Field>
             </>
           )}

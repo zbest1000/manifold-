@@ -94,7 +94,40 @@ Configure under **Brokers → Admin API**:
 
 Keys are stored server-side only and never echoed back.
 
-## TLS
+## Transports, TLS, and MQTT 5
 
-Choose the `mqtts` protocol in the connection form. For self-signed broker
-certificates, disable *Reject unauthorized*.
+The connection form takes four transports:
+
+| Protocol | Transport | Notes |
+|---|---|---|
+| `mqtt` | plain TCP | default, port 1883 |
+| `mqtts` | TLS | for self-signed broker certificates, disable *Reject unauthorized* |
+| `ws` | WebSocket | set the **path** — there is no universal default (Mosquitto `9001`, EMQX `8083/mqtt`, proxies `443`); Manifold defaults to `/mqtt` |
+| `wss` | WebSocket over TLS | same path rule |
+
+**MQTT 5** is opt-in per broker. On a v5 session, user properties, content
+type, response topic, and correlation data show up on inbound messages, and
+user properties / content type / response topic can be set when publishing.
+On v4 sessions these properties are dropped rather than sent (the protocol
+has nowhere to put them).
+
+## Intake filter and shared subscriptions
+
+The auto-subscribe filter defaults to `#` but is configurable per broker —
+scope intake to a namespace (`plant7/#`) or use a **shared subscription**:
+
+```
+$share/manifold/#
+```
+
+Messages still arrive on their real topics, so everything downstream (UNS,
+pipelines, historians) works unchanged — but the broker load-balances the
+stream across every member of the `manifold` share group. That's the knob for
+splitting intake across multiple Manifold instances on a very busy broker.
+
+> ⚠️ A shared subscription means *this instance sees only its share* — don't
+> use one on the instance that is supposed to render the complete UNS.
+
+Broker connections **edit in place**: change the host, transport, version, or
+intake filter on the broker card and Manifold reconnects with the new
+settings — no delete/re-add, no lost history.

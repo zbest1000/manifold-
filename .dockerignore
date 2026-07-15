@@ -10,3 +10,13 @@ npm-debug.log*
 .DS_Store
 .vscode
 .idea
+
+# Not needed inside any image (root Dockerfile or docker/app/Dockerfile)
+docs
+tasks
+*.md
+mcp
+native
+Dockerfile
+.dockerignore
+docker-compose.yml

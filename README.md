@@ -15,9 +15,10 @@ Manifold connects to brokers and servers, streams their data in real time, and r
 ## Features
 
 **Explore**
-- MQTT topic tree, 2D/3D graphs, and a WebGL renderer for very large namespaces (60k+ topics). JSON, text, binary, and Sparkplug B payloads decoded.
-- OPC UA address-space browsing with live monitored values.
-- Producer/consumer lineage: Sparkplug topology from BIRTH/DEATH certificates, per-client subscriptions from broker admin APIs (EMQX, HiveMQ), wildcard filters resolved against observed topics.
+- MQTT topic tree, 2D/3D graphs, and a WebGL renderer for very large namespaces (60k+ topics). JSON, text, binary, and Sparkplug B payloads decoded. The 3D view is real three.js instancing (50k nodes); force layout runs in a Web Worker.
+- MQTT 3.1.1 and 5 (per broker), over `mqtt`/`mqtts`/`ws`/`wss`, with a configurable intake filter including `$share` shared subscriptions. MQTT 5 user properties, content type, response topic, and correlation data decoded on messages; the first three publishable.
+- OPC UA address-space browsing with live monitored values; secure connections (Sign / SignAndEncrypt) with endpoint discovery and a built-in certificate trust store.
+- Producer/consumer lineage: Sparkplug topology from BIRTH/DEATH certificates (including host application STATE), per-client subscriptions from broker admin APIs (EMQX, HiveMQ), wildcard filters resolved against observed topics.
 - Network discovery by CIDR scan with protocol handshake verification.
 - Message history survives restarts; any two payloads can be diffed structurally.
 
@@ -25,21 +26,25 @@ Manifold connects to brokers and servers, streams their data in real time, and r
 - Live ISA-95 topology built from observed traffic: values on leaves, per-branch message rates, publishing edges animated.
 - Per-topic staleness calibrated to each topic's own publish cadence.
 - Namespace lint (0–100 score with structural findings), event feed (new topics, Sparkplug lifecycle), editable level ladder, and mounts for OPC UA / i3X sources.
+- Curated industrial icon set (~130 icons) with automatic mapping, plus user-defined custom SVG icons.
 
 **DataOps**
 - Pipelines: filter → transform chain (repath, pick/rename/set, scale, numeric, Sparkplug flatten, TVQ envelope) → broker or historian, with a dry-run preview against live topics and two-layer loop protection.
 - Models: merge fields from many topics into one object at a clean UNS path.
 - Historians: InfluxDB v2, TimescaleDB/PostgreSQL, and Timebase (Flow Software) — all through a store-and-forward outbox with disk spill and configurable drop policy.
-- Recorder and replay, schema contracts with drift detection, alert rules with webhooks.
+- Trends: read stored series back out of InfluxDB and TimescaleDB — up to 10 tags per chart, downsampled server-side, auto-refreshing.
+- Recorder and replay, schema contracts with drift detection, alert rules with webhooks — silence/new-topic rules plus value thresholds with sustain and hysteresis, evaluated at message latency.
+- Everything edits in place: brokers, OPC UA connections, pipelines, historians, models, bindings, and alert rules update without delete/re-add.
 
 **Tags**
 - Unified tag browser (OPC UA, Sparkplug registry, MQTT trie) with CSV import.
 - Bindings publish device tags into the UNS as plain values, TVQ envelopes, or a Sparkplug B device, with deadband and quality mapping. Read-only toward devices.
+- Optional Sparkplug primary-host session: Manifold publishes retained `STATE` so edge nodes see a host application.
 
 **Operations**
-- Token auth with admin and read-only roles, audit log, Prometheus `/metrics`, config export/import with secrets stripped.
+- Token auth with admin and read-only roles (including named, individually revocable tokens), auth-failure rate limiting, audit log, Prometheus `/metrics`, config export/import with secrets stripped.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works: system design, the message hot path, the API surface, protocol notes, and testing. Operational guides (broker ACLs, historian setup, transform reference, troubleshooting) live in the [wiki](../../wiki), generated from [`docs/wiki/`](docs/wiki).
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works: system design, the message hot path, the API surface, protocol notes, and testing. Operational guides (broker ACLs, historian setup, transform reference, troubleshooting) live in the [wiki](../../wiki), generated from [`docs/wiki/`](docs/wiki). Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Quick start
 
@@ -57,7 +62,16 @@ npm run build
 npm start              # serves API + built client on :5000
 ```
 
-A full demo stack (broker, OPC UA simulator, traffic generator) is one command away with Docker — see [DOCKER.md](DOCKER.md).
+## Docker
+
+A prebuilt image serves the API and the built UI from one container (published on every `v*` tag):
+
+```bash
+docker run -p 5000:5000 -v manifold-data:/data ghcr.io/zbest1000/manifold:latest
+# open http://localhost:5000
+```
+
+`/data` holds profiles, history, spill files, and the OPC UA PKI (`MANIFOLD_DATA_DIR`). Pass auth tokens as `-e` environment variables. A full demo stack (broker, OPC UA simulator, traffic generator) is one command away — see [DOCKER.md](DOCKER.md).
 
 ## Authentication
 
@@ -87,16 +101,16 @@ Point any MCP client at `mcp/index.js` with the backend running:
 }
 ```
 
-About 50 tools cover MQTT, UNS, Flows, DataOps, OPC UA, CESMII, and i3X. The full list is in [ARCHITECTURE.md](ARCHITECTURE.md#mcp-tools). Set `MANIFOLD_AUTH_TOKEN` in the MCP server's environment when the backend runs authenticated.
+75 tools cover MQTT, UNS, DataOps (including saves/deletes for every engine), OPC UA, CESMII, and i3X. The full list is in [ARCHITECTURE.md](ARCHITECTURE.md#mcp-tools). Set `MANIFOLD_AUTH_TOKEN` in the MCP server's environment when the backend runs authenticated.
 
 ## Testing
 
 ```bash
-cd server && npm test    # 124 tests, node:test, includes real-broker integration
+cd server && npm test    # node:test, includes real-broker integration
 cd client && npm test    # Vitest over the pure logic modules
 ```
 
-CI additionally runs an integration job against real EMQX, InfluxDB, and TimescaleDB containers. Details in [ARCHITECTURE.md](ARCHITECTURE.md#testing).
+CI additionally runs an integration job against real EMQX, InfluxDB, TimescaleDB, and Timebase containers. Details in [ARCHITECTURE.md](ARCHITECTURE.md#testing).
 
 ## License
 

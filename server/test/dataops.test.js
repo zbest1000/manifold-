@@ -90,14 +90,20 @@ test('timebase backend groups TVQs per tag into the dataset', async () => {
     ],
     fetchImpl
   );
-  assert.strictEqual(captured.url, `http://hist:4511${historians.DEFAULT_TIMEBASE_PATH}`);
+  // Documented endpoint: POST /api/datasets/{dataset}/data with the body
+  // keyed by tag name (verified against the real historian in services-int).
+  assert.strictEqual(captured.url, 'http://hist:4511/api/datasets/Manifold/data');
+  assert.strictEqual(captured.url, `http://hist:4511${historians.timebaseWritePath('Manifold')}`);
   assert.strictEqual(captured.headers.Authorization, 'Bearer k1');
-  assert.strictEqual(captured.body.dataset, 'Manifold');
-  const temp = captured.body.tags.find((t) => t.n === 'plant/temp');
-  assert.strictEqual(temp.data.length, 2);
-  assert.deepStrictEqual(Object.keys(temp.data[0]).sort(), ['q', 't', 'v']);
-  assert.strictEqual(temp.data[0].q, 192);
-  assert.strictEqual(temp.data[0].t, new Date(1700000000000).toISOString());
+  const temp = captured.body['plant/temp'];
+  assert.strictEqual(temp.length, 2);
+  assert.deepStrictEqual(Object.keys(temp[0]).sort(), ['q', 't', 'v']);
+  assert.strictEqual(temp[0].q, 192);
+  assert.strictEqual(temp[0].t, new Date(1700000000000).toISOString());
+  assert.strictEqual(captured.body['plant/press'].length, 1);
+  // dataset names with spaces (vendor docs use "The Juice Factory") must be
+  // path-encoded, not sent raw
+  assert.strictEqual(historians.timebaseWritePath('The Juice Factory'), '/api/datasets/The%20Juice%20Factory/data');
 });
 
 test('timescaledb backend creates schema once and batch-inserts parameterized rows', async () => {

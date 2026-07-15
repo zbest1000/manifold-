@@ -22,17 +22,29 @@
  *   ssl?, table? }.
  * - `timebase`: Timebase historian (Flow Software) public REST API — TVQ
  *   writes into a dataset (datasets auto-create on first write; the historian
- *   ignores TVQs older than a tag's newest point). Default endpoint follows
- *   the public REST API on :4511; the exact path is confirmable on any
- *   instance's own Swagger at `http://<host>:4511/api/help`, and `writePath`
- *   overrides it if a version differs. Config: { type:'timebase', url,
- *   dataset, writePath?, apiKey? }.
+ *   ignores TVQs older than a tag's newest point). Documented endpoint,
+ *   exercised against the real product (timebase/historian:1.3.4 service
+ *   container in CI — see .github/workflows/ci.yml and test/services-int.test.js):
+ *     POST {url}/api/datasets/{dataset}/data
+ *     body: { "<tagname>": [ { t: ISO-8601, v: value, q: quality }, ... ], ... }
+ *   Docs: https://timebase.flow-software.com/en/knowledge-base/timebase-historian-public-rest-api
+ *   (the same spec is on any instance's own Swagger at
+ *   `http://<host>:4511/api/help`; default HTTP port 4511). The API ships with
+ *   no authentication by default; `apiKey` adds `Authorization: Bearer` for
+ *   deployments that front it with a token. `writePath` overrides the whole
+ *   path if a future version moves it.
+ *   Config: { type:'timebase', url, dataset, writePath?, apiKey? }.
  *   NOTE: Timebase also ingests MQTT/Sparkplug natively — pointing its MQTT
  *   collector at your broker (or at a Manifold pipeline's output namespace)
  *   is an equally supported, often simpler path.
  */
 
-const DEFAULT_TIMEBASE_PATH = '/api/tags/data';
+// Documented multi-tag TVQ write endpoint. The dataset name is a URL path
+// segment — encodeURIComponent handles spaces and slashes (vendor docs use
+// dataset names like "The Juice Factory").
+function timebaseWritePath(dataset) {
+  return `/api/datasets/${encodeURIComponent(dataset)}/data`;
+}
 
 // ---- line protocol helpers (InfluxDB) ---------------------------------------
 
@@ -90,7 +102,10 @@ async function timebaseWrite(conn, points, fetchImpl) {
   if (!base) throw new Error('timebase url is required');
   if (!conn.dataset) throw new Error('timebase dataset is required');
 
-  // Group points per tag: one entry per tag with its TVQ array.
+  // Group points per tag. The documented body is an object keyed by tag name,
+  // each value an array of TVQs: { "plant/temp": [{ t, v, q }, ...], ... }
+  // (t = ISO-8601 timestamp, v = value, q = OPC quality — 192 is "good",
+  // matching the vendor's own examples).
   const byTag = new Map();
   for (const p of points) {
     if (!byTag.has(p.tag)) byTag.set(p.tag, []);
@@ -100,12 +115,9 @@ async function timebaseWrite(conn, points, fetchImpl) {
       q: p.quality ?? 192 // OPC "good"
     });
   }
-  const body = {
-    dataset: conn.dataset,
-    tags: [...byTag.entries()].map(([n, data]) => ({ n, data }))
-  };
+  const body = Object.fromEntries(byTag);
 
-  const path = conn.writePath || DEFAULT_TIMEBASE_PATH;
+  const path = conn.writePath || timebaseWritePath(conn.dataset);
   const res = await fetchImpl(`${base}${path}`, {
     method: 'POST',
     headers: {
@@ -448,4 +460,4 @@ function publicConfig(conn) {
   return { ...rest, hasSecret: Boolean(token || apiKey || apiSecret || password) };
 }
 
-module.exports = { writePoints, queryTags, querySeries, supportedTypes, publicConfig, toLineProtocol, closePools, DEFAULT_TIMEBASE_PATH };
+module.exports = { writePoints, queryTags, querySeries, supportedTypes, publicConfig, toLineProtocol, closePools, timebaseWritePath };

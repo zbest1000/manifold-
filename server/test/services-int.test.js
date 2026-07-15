@@ -5,8 +5,8 @@ const MqttManager = require('../services/mqttManager');
 const historians = require('../services/historians');
 
 /**
- * Integration against REAL third-party services — EMQX, InfluxDB, and
- * TimescaleDB running as CI service containers (see .github/workflows/ci.yml).
+ * Integration against REAL third-party services — EMQX, InfluxDB, TimescaleDB,
+ * and Timebase running as CI service containers (see .github/workflows/ci.yml).
  * These exist because fake-based tests only verify our own assumptions: this
  * layer fails if our client options, line protocol, or auth handling are wrong
  * against the actual products.
@@ -29,6 +29,7 @@ const INFLUX_ORG = process.env.INTEGRATION_INFLUX_ORG || 'manifold';
 const INFLUX_BUCKET = process.env.INTEGRATION_INFLUX_BUCKET || 'ci';
 const TSDB_HOST = process.env.INTEGRATION_TSDB_HOST || '127.0.0.1';
 const TSDB_PORT = Number(process.env.INTEGRATION_TSDB_PORT || 5432);
+const TIMEBASE_URL = process.env.INTEGRATION_TIMEBASE_URL || 'http://127.0.0.1:4511';
 
 const until = async (fn, ms = 15000) => {
   const deadline = Date.now() + ms;
@@ -121,4 +122,47 @@ test('TimescaleDB: batch inserts land in a real hypertable and query back', OPTS
     await pool.end().catch(() => {});
     await historians.closePools();
   }
+});
+
+test('Timebase: TVQ writes hit the real REST API and read back from the dataset', OPTS(), async (t) => {
+  // Unlike the other services, Timebase is probed at runtime: local
+  // INTEGRATION=1 runs without the timebase/historian container must still
+  // pass, so an unreachable API skips instead of failing.
+  const alive = await fetch(`${TIMEBASE_URL}/api/datasets`, { signal: AbortSignal.timeout(3000) })
+    .then((r) => r.ok)
+    .catch(() => false);
+  if (!alive) {
+    t.skip(`timebase not reachable at ${TIMEBASE_URL}`);
+    return;
+  }
+
+  // Fresh dataset per run — also proves datasets auto-create on first write
+  // (Manifold never pre-creates them).
+  const dataset = `ci-run-${Date.now()}`;
+  const tag = `ci/run/${Date.now()}`;
+  const base = Date.now() - 2000;
+  const conn = { type: 'timebase', url: TIMEBASE_URL, dataset };
+
+  const out = await historians.writePoints(conn, [
+    { tag, ts: base, value: 41, quality: 192 },
+    { tag, ts: base + 1000, value: 42, quality: 192 }
+  ]);
+  assert.strictEqual(out.written, 2);
+
+  // Read-back via the documented GET:
+  //   /api/datasets/{dataset}/data?tagname={tag}&relativeStart=-1h
+  // NOTE: tag paths keep literal '/' in the tagname query parameter (the API
+  // matches on the raw path), so the tag is NOT encodeURIComponent-ed here.
+  // Response shape: { s, e, tl: [{ t: { n, t }, d: [{ t, v, q }] }] }.
+  const readUrl = `${TIMEBASE_URL}/api/datasets/${encodeURIComponent(dataset)}/data?tagname=${tag}&relativeStart=-1h`;
+  const found = await until(async () => {
+    const res = await fetch(readUrl);
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => null);
+    const series = (data?.tl || []).find((s) => s?.t?.n === tag);
+    if (!series || !Array.isArray(series.d)) return false;
+    const values = series.d.map((p) => Number(p.v));
+    return values.includes(41) && values.includes(42);
+  });
+  assert.ok(found, 'written TVQs must be queryable back from the real Timebase');
 });

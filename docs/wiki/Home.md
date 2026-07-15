@@ -14,12 +14,12 @@
 
 | | Guide | You will learn |
 |---|---|---|
-| 🏁 | **[Getting Started](Getting-Started)** | Install, run, and connect your first broker in five minutes |
-| 🔌 | **[Broker Setup](Broker-Setup)** | Intake QoS, the EMQX ACL recipe, admin APIs for consumer lineage |
-| 🗄️ | **[Historians](Historians)** | InfluxDB, TimescaleDB, Timebase — with store-and-forward |
+| 🏁 | **[Getting Started](Getting-Started)** | Install, run (source or Docker image), and connect your first broker in five minutes |
+| 🔌 | **[Broker Setup](Broker-Setup)** | Intake QoS, transports and MQTT 5, shared subscriptions, the EMQX ACL recipe, admin APIs for consumer lineage |
+| 🗄️ | **[Historians](Historians)** | InfluxDB, TimescaleDB, Timebase — store-and-forward in, Trends charts back out |
 | 🔀 | **[Pipelines and Models](Pipelines-and-Models)** | Route, reshape, and contextualize the live stream |
-| 🏷️ | **[Tags and Sparkplug](Tags-and-Sparkplug)** | Browse device tags and publish them into the UNS |
-| 🛡️ | **[Operations](Operations)** | Auth, audit, Prometheus, config as code, alerts |
+| 🏷️ | **[Tags and Sparkplug](Tags-and-Sparkplug)** | Browse device tags, publish them into the UNS, run a Sparkplug primary host |
+| 🛡️ | **[Operations](Operations)** | Auth and named tokens, audit, Prometheus, config as code, alerts |
 | 🩺 | **[Troubleshooting](Troubleshooting)** | Symptom → cause → fix |
 
 ## 📐 How it fits together
@@ -38,6 +38,7 @@ Deep design documentation lives in the repository:
 - 📖 [README](https://github.com/zbest1000/manifold#readme) — overview and quick start
 - 🏗️ [ARCHITECTURE.md](https://github.com/zbest1000/manifold/blob/main/ARCHITECTURE.md) — system design, hot path, API surface, testing
 - 🐳 [DOCKER.md](https://github.com/zbest1000/manifold/blob/main/DOCKER.md) — one-command demo stack
+- 📝 [CHANGELOG.md](https://github.com/zbest1000/manifold/blob/main/CHANGELOG.md) — release history
 
 ---
 

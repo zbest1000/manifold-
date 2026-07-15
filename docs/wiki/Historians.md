@@ -78,7 +78,33 @@ Writes are TVQ samples. Timebase also ingests MQTT/Sparkplug natively, so
 pointing its own collector at a pipeline's output namespace is an equally
 valid integration.
 
+> ℹ️ Timebase is **write-only** from Manifold's side: use Timebase's own
+> explorer to chart what landed there. The Trends page below reads from
+> InfluxDB and TimescaleDB.
+
 ## Where the data comes from
 
 - **Pipelines** with a historian target — see [Pipelines and Models](Pipelines-and-Models).
 - The **Recorder** capturing a topic filter straight into a historian.
+
+## Reading it back — the Trends page
+
+**Trends** charts what your historians stored, without leaving Manifold:
+
+```mermaid
+flowchart LR
+    T[Trends page] -->|pick historian + tags| Q[query API]
+    Q -->|InfluxDB| F[Flux aggregateWindow]
+    Q -->|TimescaleDB| B[time_bucket average]
+    F --> C[chart - up to 10 series]
+    B --> C
+```
+
+- Pick a historian, search its stored tags, and chart **up to 10 series**
+  over a time range (last hour to last month, or custom).
+- Downsampling happens **in the database** — the range comes back as at most
+  ~1000 averaged points per series, so a month of 1 Hz data charts instantly.
+- The chart auto-refreshes every 30 s (paused while the tab is hidden).
+
+> 💡 Trends is also how you verify a pipeline → historian route end to end:
+> if the tag appears in the Trends tag search, it landed.

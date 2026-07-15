@@ -1,6 +1,6 @@
 {
   "name": "manifold-client",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Manifold — node-graph explorer for MQTT and OPC UA",
   "private": true,
   "type": "module",

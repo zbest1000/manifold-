@@ -1,6 +1,6 @@
 {
   "name": "manifold-mcp",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "MCP server exposing Manifold MQTT + OPC UA exploration tools",
   "type": "module",
   "main": "index.js",

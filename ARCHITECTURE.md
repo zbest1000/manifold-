@@ -42,7 +42,7 @@ flowchart LR
     B --> M
     O --> OM
     M --> T
-    M -- message tap --> P & R & SC & TB
+    M -- message tap --> P & R & SC & TB & AL
     OM -- monitored values --> TB
     P --> OB
     R --> OB
@@ -113,6 +113,25 @@ Key mechanics:
 - Intake subscribes at QoS 1 by default (configurable per broker). If the
   broker refuses the wildcard grant (SUBACK 0x80), the manager emits
   `subscription-downgraded` and retries at QoS 0. `$SYS/#` stays at QoS 0.
+
+## MQTT transports and versions
+
+A broker connection is `mqtt`, `mqtts`, `ws`, or `wss`. WebSocket transports
+require an explicit path (`wsPath`, default `/mqtt`) because there is no
+universal convention (Mosquitto listens on 9001, reverse proxies on 443).
+
+`mqttVersion` is 4 (MQTT 3.1.1, default) or 5 per broker. On v5 sessions,
+inbound user properties, content type, response topic, and correlation data
+are decoded onto the message (correlation data as base64), and the publish
+API takes `properties` (`userProperties`, `contentType`, `responseTopic`) on
+`POST /publish`. Properties are silently dropped on v4 sessions — mqtt.js
+errors if they are sent there.
+
+The intake subscription itself is configurable per broker (`subscribeFilter`,
+default `#`), including shared subscriptions: `$share/<group>/<filter>` works
+unchanged because messages still arrive on the real topic, so nothing
+downstream cares. Use it to split intake load across multiple Manifold
+instances or to scope intake to a namespace.
 
 ## Wildcard resolution
 
@@ -198,6 +217,70 @@ The spill is an append-only JSONL file per historian that survives restarts.
 All bounds are explicit and reported (queue depth, spill bytes, drop counts)
 in the UI and `/metrics`.
 
+### Read-back (Trends)
+
+The write path has a read counterpart: `queryTags` lists distinct stored
+topics and `querySeries` reads downsampled series for up to 10 tags over a
+time range (`GET /api/historians/:id/tags`, `POST /api/historians/:id/query`).
+
+```mermaid
+flowchart LR
+    UI[Trends page] --> API[POST /api/historians/:id/query]
+    API --> F{backend}
+    F -->|influxdb| FLUX[Flux aggregateWindow mean]
+    F -->|timescaledb| TB[time_bucket avg]
+    F -->|timebase| ERR[not supported - use the Timebase explorer]
+    FLUX --> S[series of tag, points]
+    TB --> S
+    S --> CH[SVG chart, 30s auto-refresh]
+```
+
+- Downsampling happens in the database: the requested range is bucketed to at
+  most `maxPoints` (default 1000) buckets, so a month of 1 Hz data comes back
+  as ~1000 averaged points, not 2.6M rows.
+- Flux has no parameter binding over the raw `/query` endpoint, so tag names
+  are strictly validated and quoted rather than interpolated cleverly;
+  TimescaleDB queries are parameterized.
+- Timebase is write-only from Manifold's side — its own explorer is the read
+  tool there, and the query endpoint says so instead of guessing.
+
+## Alerting
+
+Four rule types share one engine (`server/services/alertEngine.js`), with two
+evaluation paths:
+
+- **Silence and appearance rules** (`branch-silent`, `topic-silent`,
+  `new-topic`) evaluate on a 15 s interval against the topic index.
+- **Value rules** (`value-threshold`) ride the live message tap: a dot-path
+  `field` into the JSON payload (or the payload itself) is compared against
+  `value` with one of `>`, `>=`, `<`, `<=`, `==`, `!=` — at message latency,
+  not poll latency. The rule table is compiled (filters and field paths
+  pre-split, disabled rules excluded, rebuilt only on profile revision
+  change — the same pattern as the pipeline engine), so steady-state
+  per-message cost is an integer compare plus array walks.
+
+Value-rule state machine:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Breached: condition true
+    Breached --> Idle: condition false before sustainMs
+    Breached --> Firing: held for sustainMs
+    Firing --> Idle: cleared (clearValue hysteresis)
+```
+
+`sustainMs` requires the condition to hold continuously before firing;
+`clearValue` adds hysteresis (a `>` rule resolves only at
+`value <= clearValue`, a `<` rule only at `value >= clearValue`) so a signal
+hovering at the threshold cannot flap. Non-numeric payloads are ignored, not
+errors.
+
+Rules fire on transitions and can POST each event to a webhook (5 s timeout).
+Webhook failures do not kill the engine, but they are not silent either:
+`webhookFailures` and `lastWebhookError` are reported on
+`GET /api/alerts/rules`.
+
 ## Tag bindings and the Sparkplug publisher
 
 Bindings select tags from a source (OPC UA monitored items or Sparkplug
@@ -226,11 +309,97 @@ sequenceDiagram
     Note over P,B: shutdown: DDEATH per device, then NDEATH,<br/>connection closed gracefully so both frames flush
 ```
 
+### Sparkplug host application STATE
+
+The registry also folds `spBv1.0/STATE/{host}` messages: each host
+application's online/offline status (JSON `{online, timestamp}` per Sparkplug
+3.0, with legacy `ONLINE`/`OFFLINE` strings accepted) is tracked, shown in the
+UI, and emitted as `host-online` / `host-offline` events. STATE is retained,
+so a new subscriber replays the current status immediately.
+
+Manifold can act as a primary host itself: `POST /api/tags/sparkplug/state`
+starts a dedicated session that publishes retained STATE for a chosen host ID
+with a matching last-will, so edge nodes waiting on a primary host see one.
+
+## OPC UA security
+
+OPC UA connections accept `securityMode` (`None`, `Sign`, `SignAndEncrypt`)
+and `securityPolicy`. Secure modes run through a shared application PKI
+rooted at `<MANIFOLD_DATA_DIR|server/data>/pki` in the standard node-opcua
+layout:
+
+```
+pki/
+  own/certs/client_certificate.pem   Manifold's application certificate
+  own/private/                       private key
+  trusted/certs/                     server certificates we accept
+  rejected/                          server certificates seen but not trusted
+  issuers/                           CA material
+```
+
+The self-signed application certificate is created on first use; the URI
+baked into it must match the client's application URI (node-opcua checks the
+two on every secure connect). `GET /api/opcua/certificate` returns it in PEM
+form so it can be trusted on the server side.
+
+Trust is explicit in both directions:
+
+```mermaid
+flowchart LR
+    C[secure connect] --> V{server certificate known?}
+    V -->|trusted| OK[session established]
+    V -->|unknown| REJ[lands in rejected/]
+    REJ --> T1[POST /api/opcua/trust with thumbprint]
+    REJ --> T2[reconnect with trustServer true]
+    T1 --> OK
+    T2 --> OK
+```
+
+Unknown server certificates are never auto-accepted: they land in
+`rejected/`, listed by `GET /api/opcua/trust`, and are promoted by thumbprint
+(`POST /api/opcua/trust`) or by an explicit trust-on-first-connect flag on
+the connection. A trust failure produces an actionable error naming both
+paths instead of a bare `BadSecurityChecksFailed`.
+
+`POST /api/opcua/discover` asks an endpoint URL for its available endpoints
+(security mode/policy combinations), so the right mode can be picked before
+connecting. After any reconnect, the subscription and every monitored item
+are rebuilt from the recorded (nodeId, samplingInterval) pairs — the UI never
+shows a live-looking value that stopped updating.
+
+## Client graph stack
+
+All graph rendering and layout is client-side; the server ships data, not
+coordinates.
+
+- **Force layout** runs d3-force in a Web Worker
+  (`client/src/graph/forceLayoutWorker.js`, 30k-node cap) so layout ticks
+  never block the UI thread.
+- **3D** (`ForceGraph3D.jsx`) is real three.js: nodes are one `InstancedMesh`
+  of low-poly spheres, smooth at 50k nodes, with analytic ray-sphere picking
+  instead of triangle raycasting. three.js is a lazy chunk loaded only when
+  the 3D view opens.
+- **WebGL 2D** remains the renderer for very large namespaces (60k+ topics).
+- **Icons**: the UNS topology uses a curated ~130-icon industrial subset
+  imported individually from lucide (tree-shaken; the full ~2,000-icon
+  library stays out of the main bundle and loads on demand in the picker).
+  User-defined single-path SVG icons are stored server-side
+  (`/api/uns/icons`) and resolve like built-ins.
+
 ## Security model
 
 - `MANIFOLD_AUTH_TOKEN` (admin) and optional `MANIFOLD_VIEWER_TOKEN` (read-only) gate the
   REST API and the socket handshake. Viewer tokens can read everything but
   every mutation — HTTP or socket — is refused.
+- `MANIFOLD_TOKENS` (`name:token:role,…`) issues named tokens with per-token
+  audit identity — revoke one person's token without rotating everyone's.
+- Failed authentication is rate-limited per IP (20 failures/minute, then
+  429), so the bearer token cannot be brute-forced quietly.
+- CORS is locked to `CLIENT_URL` (default `http://localhost:3000`); a blanket
+  `cors()` would let any website script an authenticated browser.
+- Outbound HTTP (historian writes/queries, alert webhooks, broker admin APIs)
+  goes through bounded timeouts (`services/httpTimeout.js`) — a hung remote
+  endpoint cannot pin a request handler forever.
 - Every mutating action lands in the audit log (role, IP, route, outcome)
   with secrets redacted, kept in a ring buffer and an append-only JSONL file.
 - Secrets (broker passwords, historian tokens, admin API keys) are stored
@@ -274,27 +443,35 @@ Observed behavior that shapes the implementation:
 | `GET` | `/api/system/status` | Overall status |
 | `POST` | `/api/system/discovery/start` | Start a network scan |
 | `GET/POST` | `/api/mqtt/brokers` | List / connect brokers |
+| `PUT/DELETE` | `/api/mqtt/brokers/:id` | Edit in place (reconnects); disconnect |
 | `GET` | `/api/mqtt/brokers/:id/topics` · `/messages` | Topic list; recent messages |
-| `POST` | `/api/mqtt/brokers/:id/publish` | Publish |
+| `POST` | `/api/mqtt/brokers/:id/publish` | Publish (MQTT 5 `properties` on v5 sessions) |
 | `GET` | `/api/mqtt/brokers/:id/sparkplug` · `/sys` | Sparkplug topology; `$SYS` summary |
 | `POST` | `/api/mqtt/brokers/:id/subscriptions/resolve` | Resolve wildcard filters against observed topics |
 | `GET` | `/api/mqtt/brokers/:id/topictree` | One tree level with subtree counts |
 | `GET` | `/api/mqtt/brokers/:id/admin/pubsub` | Per-client subscriptions from the broker admin API |
 | `GET` | `/api/mqtt/brokers/:id/uns/tree` · `/uns/lint` · `/uns/events` | UNS skeleton, lint report, event feed |
 | `GET/POST/DELETE` | `/api/uns/mounts` | Mount OPC UA / i3X sources into the UNS |
-| `GET/POST/DELETE` | `/api/alerts/rules` · `GET /api/alerts/events` | Alert rules; recent firings |
-| `GET/POST/DELETE` | `/api/pipelines` · `POST /preview` | Routes; dry-run |
-| `GET/POST/DELETE` | `/api/historians` · `POST /:id/test` | Historian connections; test write |
+| `GET/POST/DELETE` | `/api/uns/icons` | Custom UNS icons (single-path SVG, upsert by name) |
+| `GET/POST/DELETE` | `/api/alerts/rules` · `GET /api/alerts/events` | Alert rules (upsert by id); recent firings |
+| `GET/POST/DELETE` | `/api/pipelines` · `POST /preview` | Routes (upsert by id); dry-run |
+| `GET/POST/DELETE` | `/api/historians` · `POST /:id/test` | Historian connections (upsert by id); test write |
+| `GET/POST` | `/api/historians/:id/tags` · `/query` | Read-back: stored tags; downsampled series |
 | `GET/POST/DELETE` | `/api/models` | Contextualization models |
 | `GET/POST/DELETE` | `/api/recorder` · `GET /:id/data` · `POST/DELETE /replay` | Recording; read-back; replay |
 | `GET/POST/DELETE` | `/api/contracts` · `/infer` · `/violations` | Schema contracts |
 | `GET` | `/api/tags/sources` · `/browse` | Tag browser |
 | `GET/POST/DELETE` | `/api/tags/bindings` | Tag bindings |
+| `POST` | `/api/tags/sparkplug/state` | Start/stop a Sparkplug host STATE session |
 | `GET` | `/api/audit` | Audit trail (admin only) |
 | `GET/POST` | `/api/system/config/export` · `/import` | Config as code |
 | `GET` | `/metrics` | Prometheus metrics |
 | `POST` | `/api/opcua/connections` · `/:id/monitor` | OPC UA connect; monitor |
+| `PUT/DELETE` | `/api/opcua/connections/:id` | Edit in place (reconnects); disconnect |
 | `GET` | `/api/opcua/connections/:id/browse` | Browse the address space |
+| `POST` | `/api/opcua/discover` | Endpoint discovery (security modes/policies) |
+| `GET` | `/api/opcua/certificate` | Manifold's application certificate (PEM) |
+| `GET/POST` | `/api/opcua/trust` | List trusted/rejected certs; trust by thumbprint |
 | `POST` | `/api/cesmii/config` · `/history` | CESMII configure; time-series |
 | `POST` | `/api/i3x/connect` · `/probe` · `/value` · `/history` | i3X connect/probe; reads |
 | `GET` | `/api/i3x/objects` · `/graph` · `/namespaces` | i3X inventory |
@@ -305,28 +482,29 @@ while a client is connected.
 
 ## MCP tools
 
-| Tool | Purpose |
+75 tools, covering reads and mutations across the whole backend. Mutating
+tools say so in their descriptions, and every call goes through the same
+authenticated REST API (and therefore the same audit log) as the UI.
+
+| Group | Tools |
 | --- | --- |
-| `system_status` | Backend status |
-| `discover_scan` / `discover_results` | Network scan |
-| `mqtt_connect` / `mqtt_disconnect` / `mqtt_list_brokers` | Broker connections |
-| `mqtt_list_topics` / `mqtt_get_messages` | Topics and payloads |
-| `mqtt_subscribe` / `mqtt_publish` | Subscribe / publish |
-| `mqtt_sparkplug_topology` / `mqtt_sys_stats` | Sparkplug topology; `$SYS` health |
-| `mqtt_resolve_subscriptions` / `mqtt_topic_tree` | Wildcard resolution; tree walk |
-| `mqtt_admin_pubsub` | Admin-API subscriptions, optionally resolved |
-| `uns_tree` / `uns_lint` / `uns_events` | UNS skeleton, lint, events |
-| `pipelines_list` / `pipeline_preview` | Routes with metrics; dry-run |
-| `historians_list` / `models_list` / `contracts_violations` | DataOps inventory |
-| `bindings_list` / `audit_recent` | Bindings; audit trail |
-| `opcua_connect` / `opcua_disconnect` / `opcua_list_connections` | OPC UA connections |
-| `opcua_browse` / `opcua_read` / `opcua_monitor` | Address space operations |
-| `cesmii_configure` / `cesmii_status` / `cesmii_list_equipment` / `cesmii_list_attributes` / `cesmii_history` / `cesmii_query` | CESMII SMIP |
-| `i3x_connect` / `i3x_probe` / `i3x_status` / `i3x_namespaces` / `i3x_object_types` / `i3x_graph` / `i3x_related` / `i3x_value` / `i3x_history` | i3X |
+| System & config | `system_status` · `discover_scan` · `discover_results` · `discovery_stop` · `config_export` · `config_import` |
+| MQTT | `mqtt_list_brokers` · `mqtt_connect` · `mqtt_disconnect` · `mqtt_list_topics` · `mqtt_get_messages` · `mqtt_sparkplug_topology` · `mqtt_sys_stats` · `mqtt_resolve_subscriptions` · `mqtt_topic_tree` · `mqtt_admin_pubsub` · `mqtt_subscribe` · `mqtt_publish` |
+| UNS | `uns_tree` · `uns_lint` · `uns_events` · `mount_save` · `mount_delete` |
+| Pipelines | `pipelines_list` · `pipeline_preview` · `pipeline_save` · `pipeline_delete` |
+| Historians | `historians_list` · `historian_save` · `historian_delete` · `historian_test` |
+| Contracts | `contracts_list` · `contract_infer` · `contract_lock` · `contract_delete` · `contracts_violations` |
+| Models | `models_list` · `model_save` · `model_delete` |
+| Tags & bindings | `tags_sources` · `tags_browse` · `bindings_list` · `binding_save` · `binding_delete` |
+| Recorder & replay | `recorder_list` · `recorder_save` · `recorder_delete` · `recorder_data` · `replay_start` · `replay_stop` |
+| Alerts & audit | `alert_rule_save` · `alert_rule_delete` · `alert_events` · `audit_recent` |
+| OPC UA | `opcua_list_connections` · `opcua_connect` · `opcua_disconnect` · `opcua_browse` · `opcua_read` · `opcua_monitor` |
+| CESMII SMIP | `cesmii_status` · `cesmii_configure` · `cesmii_list_equipment` · `cesmii_list_attributes` · `cesmii_history` · `cesmii_query` |
+| i3X | `i3x_status` · `i3x_connect` · `i3x_probe` · `i3x_namespaces` · `i3x_object_types` · `i3x_graph` · `i3x_related` · `i3x_value` · `i3x_history` |
 
 ## Testing
 
-Server tests (124, `cd server && npm test`) run on `node:test` through a
+Server tests (`cd server && npm test`) run on `node:test` through a
 small serial runner (`server/test/run.js`) that executes each file
 in-process. The stock `node --test` runner spawns each file as a child and
 streams results over an IPC pipe whose framing corrupts intermittently on CI
@@ -340,8 +518,11 @@ Coverage highlights:
   history snapshot/restore, auth/RBAC boots with audit and `/metrics`.
 - DataOps: every transform, both loop guards (including an A→B→A ping-pong),
   outbox spill/drain across a simulated restart, both drop policies verified
-  byte-for-byte on the spill file, all four historian wire formats against
-  fakes (including an identifier-injection refusal for TimescaleDB).
+  byte-for-byte on the spill file, every historian wire format (write and
+  read-back) against fakes (including an identifier-injection refusal for
+  TimescaleDB).
+- OPC UA security: PKI bootstrap (application certificate generation), the
+  trust API, and promotion of rejected certificates to trusted.
 - Subscription-refusal fallback against a fake client reproducing mqtt.js's
   error-form SUBACK.
 - Real-broker integration via in-process aedes: manager round-trip, a
@@ -358,7 +539,9 @@ CI (`.github/workflows/ci.yml`) runs four jobs on every push and PR: server
 tests (Node 22), client tests + production build, an MCP load check, and an
 integration job against real service containers — EMQX 5 (configured to
 authorize wildcard QoS-1 intake), InfluxDB 2 (line-protocol writes queried
-back via Flux), and TimescaleDB (rows queried back out of a hypertable).
+back via Flux), TimescaleDB (rows queried back out of a hypertable), and a
+Timebase historian. Version tags (`v*`) additionally build and publish the
+`ghcr.io/zbest1000/manifold` image.
 Jobs carry 15-minute timeouts, the service-wait step fails by name instead of
 passing through a dead container, failures dump container logs, and a
 concurrency group cancels superseded runs.

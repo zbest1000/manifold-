@@ -149,7 +149,7 @@ function deviceData() {
 
 // ---------------------------------------------------------------------------
 console.log(`simulator: connecting to ${URL}`);
-const client = mqtt.connect(URL, { reconnectPeriod: 3000, clientId: `tc-sim-${Date.now()}` });
+const client = mqtt.connect(URL, { reconnectPeriod: 3000, clientId: `manifold-sim-${Date.now()}` });
 
 // Publish BIRTH certificates. Retained so any late-joining subscriber gets the
 // topology + metric name↔alias map immediately, and re-sent periodically so a
