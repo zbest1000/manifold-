@@ -282,15 +282,22 @@ class MqttManager extends EventEmitter {
     const message = row.buffer;
     let payload;
     let payloadFormat = 'text';
-    const text = message.toString('utf8');
-    try {
-      payload = JSON.parse(text);
-      payloadFormat = 'json';
-    } catch {
-      payload = text;
-      if (text.includes('�')) {
-        payloadFormat = 'binary';
-        payload = message.toString('base64');
+    if (row.truncated) {
+      // Oversized payload: only the first maxPayloadBytes were retained. Do not
+      // JSON.parse a partial buffer — surface it as a bounded preview instead.
+      payloadFormat = 'large';
+      payload = `[payload truncated: ${row.fullSize} bytes]`;
+    } else {
+      const text = message.toString('utf8');
+      try {
+        payload = JSON.parse(text);
+        payloadFormat = 'json';
+      } catch {
+        payload = text;
+        if (text.includes('�')) {
+          payloadFormat = 'binary';
+          payload = message.toString('base64');
+        }
       }
     }
 
@@ -358,29 +365,46 @@ class MqttManager extends EventEmitter {
     const registry = this.sparkplug.get(brokerId);
     const batch = [];
     let forwarded = 0;
-    let lastActivity = null;
 
     const tap = this.listenerCount('message') > 0;
+    let lastActivityTs = 0;
     for (const row of rows) {
+      if (row.ts > lastActivityTs) lastActivityTs = row.ts;
+
+      const needForward = forwarded < FORWARD_CAP;
+      const needSpark = registry && this.isSparkplugTopic(row.topic);
+      // If nothing will consume this row's built object — no tap listener, past
+      // the forward cap, and not Sparkplug — skip the JSON.parse / protobuf
+      // decode entirely. A wide fan-out burst (tens of thousands of distinct
+      // topics in one flush) no longer does unbounded synchronous work.
+      if (!tap && !needForward && !needSpark) continue;
+
       const messageObj = this.buildMessage(brokerId, row);
       // Split once here; every tap engine matches on segments.
       if (tap) messageObj.topicParts = messageObj.topic.split('/');
-      lastActivity = messageObj.timestamp;
 
       // Fold Sparkplug traffic into the device topology (identity from the topic,
       // metrics from the decoded payload). Reuses the decode already done above.
-      if (registry && this.isSparkplugTopic(messageObj.topic)) {
+      if (needSpark) {
         // Raw payload rides along for STATE host certificates, whose
         // online/offline verdict lives in the (non-protobuf) payload body.
         registry.update(messageObj.topic, messageObj.sparkplug || null, row.ts, messageObj.payload);
       }
 
       // Message tap for the DataOps engines (pipelines, recorder, contracts,
-      // models). Fires on the coalesced stream — bounded by topics touched per
-      // flush, not raw publish rate — and costs one branch when nobody listens.
-      if (tap) this.emit('message', messageObj);
+      // models). EventEmitter.emit is synchronous, so a throwing engine listener
+      // would otherwise propagate out of the flush interval and crash the whole
+      // process — one bad broker message must not take down the control plane.
+      if (tap) {
+        try {
+          this.emit('message', messageObj);
+        } catch (error) {
+          this.tapErrors = (this.tapErrors || 0) + 1;
+          console.warn(`mqtt message tap threw for ${brokerId} "${messageObj.topic}": ${error.message}`);
+        }
+      }
 
-      if (forwarded < FORWARD_CAP) {
+      if (needForward) {
         batch.push(messageObj);
         forwarded++;
         if (ring) {
@@ -391,11 +415,18 @@ class MqttManager extends EventEmitter {
     }
 
     const info = this.connections.get(brokerId);
-    if (info && lastActivity) info.lastActivity = new Date(lastActivity);
+    if (info && lastActivityTs) info.lastActivity = new Date(lastActivityTs);
 
     // Serializing the batch for zero sockets is pure waste (headless deploys,
-    // MCP-only usage) — skip the emit when nobody is listening.
-    if (batch.length && (this.io.engine?.clientsCount ?? 1) > 0) this.io.emit('mqtt-messages', batch);
+    // MCP-only usage) — skip the emit when nobody is listening. volatile: live
+    // telemetry is loss-tolerant (the topic store is the source of truth), so a
+    // slow/stalled client's packets are dropped rather than queued unbounded in
+    // server memory.
+    if (batch.length && (this.io.engine?.clientsCount ?? 1) > 0) {
+      // volatile drops packets for lagging sockets rather than queuing them in
+      // server memory; fall back to plain emit for io stubs without it (tests).
+      (this.io.volatile || this.io).emit('mqtt-messages', batch);
+    }
   }
 
   flushBatches() {

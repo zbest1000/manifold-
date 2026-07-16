@@ -15,23 +15,34 @@
  * Same coalescing semantics as before: `ingest` is O(1); `drain` returns the
  * latest value per topic touched since the last drain.
  */
+// Per-topic payload cap. Manifold auto-subscribes '#' to brokers whose other
+// clients are untrusted, so a single publisher sending huge payloads across many
+// topics could otherwise grow the store (topics x payload bytes) without bound
+// and OOM the process. Payloads above the cap are truncated for storage/preview;
+// the full message is never retained. 256 KB is already far larger than normal
+// telemetry; override with MANIFOLD_MAX_PAYLOAD_BYTES.
+const DEFAULT_MAX_PAYLOAD_BYTES = Number(process.env.MANIFOLD_MAX_PAYLOAD_BYTES) || 256 * 1024;
+
 class TopicStore {
-  constructor(maxTopics = 2_000_000) {
+  constructor(maxTopics = 2_000_000, maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES) {
     this.index = new Map(); // topic -> slot
     this.cap = 1024;
     this.n = 0;
     this.count = new Uint32Array(this.cap);
     this.ts = new Float64Array(this.cap);
-    this.flags = new Uint8Array(this.cap); // bit0 retain, bits1-2 qos
-    this.payload = new Array(this.cap); // latest payload as a latin1 string
+    this.flags = new Uint8Array(this.cap); // bit0 retain, bits1-2 qos, bit3 truncated
+    this.payload = new Array(this.cap); // latest payload as a latin1 string (capped)
+    this.fullSize = new Uint32Array(this.cap); // slot -> true byte size before truncation
     this.topics = new Array(this.cap); // slot -> topic (reverse of index; enables incremental consumers)
     this.firstSeen = new Float64Array(this.cap); // slot -> first-observation ts
     this.events = []; // bounded ring of namespace events (new topics only — rare in steady state)
     this.eventSeq = 0; // monotonic event id — lets consumers watermark exactly (ms timestamps collide)
     this.dirty = new Set();
     this.maxTopics = maxTopics;
+    this.maxPayloadBytes = maxPayloadBytes;
     this.total = 0;
     this.dropped = 0;
+    this.truncatedCount = 0;
   }
 
   _grow() {
@@ -47,6 +58,9 @@ class TopicStore {
     this.flags = flags;
     this.payload.length = nc;
     this.topics.length = nc;
+    const fullSize = new Uint32Array(nc);
+    fullSize.set(this.fullSize);
+    this.fullSize = fullSize;
     const fs = new Float64Array(nc);
     fs.set(this.firstSeen);
     this.firstSeen = fs;
@@ -78,9 +92,19 @@ class TopicStore {
     }
     this.count[slot]++;
     this.ts[slot] = Date.now();
-    this.flags[slot] = (retain ? 1 : 0) | ((qos & 3) << 1);
+    // Cap the retained bytes: truncate above maxPayloadBytes and flag it (bit3),
+    // so store, drain, the recent ring, and JSON.parse all inherit the bound.
+    let stored = message;
+    let truncated = 0;
+    if (message.length > this.maxPayloadBytes) {
+      stored = message.subarray(0, this.maxPayloadBytes);
+      truncated = 8; // bit3
+      this.truncatedCount++;
+    }
+    this.fullSize[slot] = message.length;
+    this.flags[slot] = (retain ? 1 : 0) | ((qos & 3) << 1) | truncated;
     // latin1 = 1 byte/char in V8, lossless for any byte sequence.
-    this.payload[slot] = message.toString('latin1');
+    this.payload[slot] = stored.toString('latin1');
     this.dirty.add(topic);
     return true;
   }
@@ -93,6 +117,8 @@ class TopicStore {
       buffer: Buffer.from(this.payload[slot], 'latin1'),
       qos: (f >> 1) & 3,
       retain: (f & 1) === 1,
+      truncated: (f & 8) === 8,
+      fullSize: this.fullSize[slot],
       ts: this.ts[slot],
       count: this.count[slot]
     };
