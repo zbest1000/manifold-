@@ -116,6 +116,11 @@ export const api = {
     const q = new URLSearchParams(params).toString();
     return request(`/api/recorder/${encodeURIComponent(id)}/data${q ? `?${q}` : ''}`);
   },
+  // Downsampled numeric series for Trends. tags: string[], from/to: epoch ms.
+  recordingSeries: (id, { tags = [], from, to, maxPoints = 1000 } = {}) => {
+    const q = new URLSearchParams({ tags: tags.join(','), from, to, maxPoints }).toString();
+    return request(`/api/recorder/${encodeURIComponent(id)}/series?${q}`);
+  },
   startReplay: (body) => request('/api/recorder/replay', { method: 'POST', body: JSON.stringify(body) }),
   stopReplay: () => request('/api/recorder/replay', { method: 'DELETE' }),
 

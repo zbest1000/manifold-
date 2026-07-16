@@ -22,6 +22,27 @@ const { matchParts, compiledView } = require('./mqttMatch');
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 const READ_LIMIT_MAX = 5000;
 
+// Reduce a chronological [[ts, value], ...] series to at most `cap` points by
+// keeping the last value in each of `cap` equal time buckets — a cheap,
+// order-preserving downsample for charting long recordings.
+function downsampleLastPerBucket(points, cap) {
+  if (points.length <= cap) return points;
+  const first = points[0][0];
+  const span = points[points.length - 1][0] - first || 1;
+  const width = span / cap;
+  const out = [];
+  let bucket = -1;
+  let last = null;
+  for (const pt of points) {
+    const idx = Math.min(cap - 1, Math.floor((pt[0] - first) / width));
+    if (idx !== bucket && last) out.push(last);
+    bucket = idx;
+    last = pt;
+  }
+  if (last) out.push(last);
+  return out;
+}
+
 class Recorder {
   constructor({ mqttManager, profiles, outbox = null, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data') }) {
     this.manager = mqttManager;
@@ -157,6 +178,41 @@ class Recorder {
       if (out.length > cap) out.shift(); // keep the newest `cap` in range
     }
     return { points: out, total, truncated: total > out.length };
+  }
+
+  /**
+   * Downsampled multi-tag numeric series over a file recording, shaped exactly
+   * like historians.querySeries ({ series: [{ tag, points: [[tsMs, value]] }] })
+   * so the Trends UI can chart a recording without any external database. Only
+   * numeric values chart; each tag is bucketed to at most maxPoints (last value
+   * per time bucket).
+   */
+  async series(id, { tags = [], from = 0, to = Infinity, maxPoints = 1000 } = {}) {
+    await this.sync(id);
+    const file = this.filePath(id);
+    if (!fs.existsSync(file)) return { series: [] };
+    const wanted = new Set(tags);
+    const byTag = new Map(); // topic -> [[tsMs, value]] in chronological order
+    const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line) continue;
+      let p;
+      try {
+        p = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (wanted.size && !wanted.has(p.topic)) continue;
+      if (p.t < from || p.t > to) continue;
+      const num = typeof p.v === 'number' ? p.v : Number(p.v);
+      if (!Number.isFinite(num)) continue; // only numeric points chart
+      if (!byTag.has(p.topic)) byTag.set(p.topic, []);
+      byTag.get(p.topic).push([p.t, num]);
+    }
+    const cap = Math.min(Math.max(Number(maxPoints) || 1000, 1), READ_LIMIT_MAX);
+    const series = [];
+    for (const [tag, points] of byTag) series.push({ tag, points: downsampleLastPerBucket(points, cap) });
+    return { series };
   }
 
   remove(id) {

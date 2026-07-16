@@ -66,14 +66,43 @@ router.get('/:id/data', async (req, res) => {
   if (!profiles.getIn('recordings', req.params.id)) {
     return res.status(404).json({ error: 'Recording not found' });
   }
-  res.json(
-    await recorder.read(req.params.id, {
-      topic: req.query.topic || null,
-      from: Number(req.query.from) || 0,
-      to: Number(req.query.to) || Infinity,
-      limit: Number(req.query.limit) || 500
-    })
-  );
+  try {
+    res.json(
+      await recorder.read(req.params.id, {
+        topic: req.query.topic || null,
+        from: Number(req.query.from) || 0,
+        to: Number(req.query.to) || Infinity,
+        limit: Number(req.query.limit) || 500
+      })
+    );
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/recorder/:id/series?tags=a,b&from=&to=&maxPoints= — downsampled numeric
+// series for the Trends chart, no external historian required.
+router.get('/:id/series', async (req, res) => {
+  const { profiles, recorder } = req.app.locals.services;
+  if (!profiles.getIn('recordings', req.params.id)) {
+    return res.status(404).json({ error: 'Recording not found' });
+  }
+  const tags = String(req.query.tags || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  try {
+    res.json(
+      await recorder.series(req.params.id, {
+        tags,
+        from: Number(req.query.from) || 0,
+        to: Number(req.query.to) || Infinity,
+        maxPoints: Number(req.query.maxPoints) || 1000
+      })
+    );
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 module.exports = router;

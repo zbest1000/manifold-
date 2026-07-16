@@ -612,6 +612,27 @@ test('recorder captures matching messages to jsonl and reads them back', async (
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('recorder.series returns downsampled numeric series and drops non-numeric', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifold-rec-'));
+  const m = new MqttManager({ emit() {} });
+  const rec = { id: 'rs', brokerId: 'b1', filter: 'plant/#', enabled: true, target: { type: 'file' } };
+  const r = new Recorder({ mqttManager: m, profiles: fakeProfiles({ recordings: { rs: rec } }), dir });
+  r.start();
+  m.emit('message', msg('b1', 'plant/temp', 20));
+  m.emit('message', msg('b1', 'plant/temp', 22));
+  m.emit('message', msg('b1', 'plant/name', 'a string')); // non-numeric — must not chart
+  const out = await r.series('rs', { tags: ['plant/temp', 'plant/name'], maxPoints: 100 });
+  const temp = out.series.find((s) => s.tag === 'plant/temp');
+  assert.ok(temp, 'numeric topic must appear');
+  assert.strictEqual(temp.points.length, 2);
+  assert.strictEqual(temp.points[1][1], 22, 'point shape is [tsMs, value]');
+  assert.ok(!out.series.find((s) => s.tag === 'plant/name'), 'all-non-numeric topic is dropped');
+  r.stop();
+  r.remove('rs');
+  m.shutdown();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('recorder stops at the file cap and reports full', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifold-rec-'));
   const m = new MqttManager({ emit() {} });
