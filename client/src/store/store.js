@@ -94,6 +94,7 @@ function scheduleTick(store) {
 
 export const useStore = create((set, get) => ({
   connected: false,
+  authRole: null, // 'admin' | 'viewer' | null (unknown/open) — from /api/whoami
   brokers: [],
   opcua: [],
   discovery: { scanning: false, results: [], progress: null },
@@ -143,6 +144,7 @@ export const useStore = create((set, get) => ({
   },
 
   setConnected: (connected) => set({ connected }),
+  setAuthRole: (authRole) => set({ authRole }),
   setBrokers: (brokers) => set({ brokers }),
   setOpcua: (opcua) => set({ opcua }),
 

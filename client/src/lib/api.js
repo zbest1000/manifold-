@@ -50,6 +50,7 @@ async function request(path, options = {}) {
 
 export const api = {
   systemStatus: () => request('/api/system/status'),
+  whoami: () => request('/api/whoami'),
 
   // MQTT
   listBrokers: () => request('/api/mqtt/brokers'),

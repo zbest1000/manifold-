@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Share2, Radio, Cpu, Radar, Settings as SettingsIcon, Activity, Factory, Boxes, Waypoints, Network, Workflow, Tags as TagsIcon, LineChart } from 'lucide-react';
+import { Share2, Radio, Cpu, Radar, Settings as SettingsIcon, Activity, Factory, Boxes, Waypoints, Network, Workflow, Tags as TagsIcon, LineChart, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { useStore } from '@/store/store';
 import { StatusDot } from './ui';
@@ -48,6 +48,7 @@ export default function Layout() {
   const connected = useStore((s) => s.connected);
   const brokers = useStore((s) => s.brokers);
   const opcua = useStore((s) => s.opcua);
+  const viewerReadOnly = useStore((s) => s.authRole === 'viewer');
 
   return (
     <div className="flex h-screen bg-surface-950 text-slate-100">
@@ -61,6 +62,15 @@ export default function Layout() {
             <p className="text-[11px] text-slate-500">UNS · MQTT · OPC UA</p>
           </div>
         </div>
+
+        {viewerReadOnly && (
+          <div
+            className="mx-5 mb-2 flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-300"
+            title="This token is read-only — changes will be rejected by the server."
+          >
+            <Lock size={12} /> Read-only session
+          </div>
+        )}
 
         <nav className="flex-1 overflow-y-auto px-3 py-1">
           {NAV_GROUPS.map((group, gi) => (
