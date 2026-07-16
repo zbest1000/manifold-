@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -537,6 +537,7 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
   const [qos, setQos] = useState(0);
   const [retain, setRetain] = useState(false);
   const [diffSel, setDiffSel] = useState([]); // up to two message ids for payload diff
+  const [historyOpen, setHistoryOpen] = useState(false); // full history-chart popup
 
   useEffect(() => {
     if (!fullTopic) return;
@@ -583,11 +584,14 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
     );
   };
 
-  const numericSeries = merged
+  // Numeric value history (oldest → newest), with timestamps for a real time
+  // axis in the history popup.
+  const numericPoints = merged
     .slice()
     .reverse()
-    .map((m) => numericFromPayload(m.payload))
-    .filter((v) => v != null);
+    .map((m) => ({ ts: new Date(m.timestamp).getTime(), v: numericFromPayload(m.payload) }))
+    .filter((p) => p.v != null && Number.isFinite(p.ts));
+  const numericSeries = numericPoints.map((p) => p.v);
 
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l border-white/5 bg-surface-900/50">
@@ -646,8 +650,12 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
                 {String(latest.payload)}
               </pre>
             )}
-            {numericSeries.length > 3 && <PanelPlot series={numericSeries} />}
+            {numericSeries.length >= 2 && <PanelPlot series={numericSeries} onExpand={() => setHistoryOpen(true)} />}
           </Card>
+        )}
+
+        {historyOpen && (
+          <HistoryChartModal topic={fullTopic} points={numericPoints} onClose={() => setHistoryOpen(false)} />
         )}
 
         {meta.isLeaf && (
@@ -804,25 +812,120 @@ function Stat({ icon: Icon, label, value }) {
   );
 }
 
-// Numeric history plot for the detail panel.
-function PanelPlot({ series }) {
+// Compact numeric sparkline for the detail panel, with an expand-to-popup action.
+function PanelPlot({ series, onExpand }) {
   const min = Math.min(...series);
   const max = Math.max(...series);
   const span = max - min || 1;
   const w = 320;
   const h = 70;
-  const pts = series
-    .map((v, i) => `${(i / (series.length - 1)) * w},${h - ((v - min) / span) * h}`)
-    .join(' ');
+  const pts = series.map((v, i) => `${(i / (series.length - 1)) * w},${h - ((v - min) / span) * h}`).join(' ');
   return (
     <div className="mt-3 rounded-lg border border-white/5 bg-surface-950/50 p-2">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-20 w-full" preserveAspectRatio="none">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Value history</span>
+        {onExpand && (
+          <button onClick={onExpand} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-slate-400 transition hover:bg-white/5 hover:text-accent-300">
+            <Maximize2 size={11} /> Expand
+          </button>
+        )}
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-20 w-full cursor-pointer" preserveAspectRatio="none" onClick={onExpand}>
         <polyline points={pts} fill="none" stroke="#38bdf8" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
       </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-slate-500">
-        <span>min {min}</span>
+      <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
+        <span>min {fmtNum(min)}</span>
         <span>{series.length} pts</span>
-        <span>max {max}</span>
+        <span>max {fmtNum(max)}</span>
+      </div>
+    </div>
+  );
+}
+
+function fmtNum(n) {
+  if (!Number.isFinite(n)) return '—';
+  const a = Math.abs(n);
+  if (a !== 0 && (a < 0.001 || a >= 1e6)) return n.toExponential(2);
+  return Number(n.toFixed(a < 1 ? 4 : a < 100 ? 2 : 1)).toString();
+}
+
+// Full value-history chart in a popup — a proper time-series with an area fill,
+// an emphasized latest point, a faint grid, and summary stats. Built from the
+// in-memory recent-message ring for the topic; no historian required.
+function HistoryChartModal({ topic, points, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const values = points.map((p) => p.v);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const t0 = points[0].ts;
+  const t1 = points[points.length - 1].ts;
+  const tspan = t1 - t0 || 1;
+  const avg = values.reduce((s, v) => s + v, 0) / values.length;
+  const W = 720;
+  const H = 260;
+  const padL = 8;
+  const padR = 8;
+  const padY = 16;
+  const x = (ts) => padL + ((ts - t0) / tspan) * (W - padL - padR);
+  const y = (v) => padY + (1 - (v - min) / span) * (H - padY * 2);
+  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.ts).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(t1).toFixed(1)},${(H - padY).toFixed(1)} L${x(t0).toFixed(1)},${(H - padY).toFixed(1)} Z`;
+  const last = points[points.length - 1];
+  const durS = Math.max(1, Math.round(tspan / 1000));
+  const durLabel = durS < 90 ? `${durS}s` : durS < 5400 ? `${Math.round(durS / 60)}m` : `${(durS / 3600).toFixed(1)}h`;
+
+  const Stat = ({ label, value }) => (
+    <div>
+      <p className="text-2xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mono text-sm font-semibold text-slate-100">{value}</p>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-surface-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Value history">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-2xs uppercase tracking-wide text-slate-500">Value history · last {durLabel}</p>
+            <p className="mono truncate text-sm font-medium text-slate-100">{topic}</p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-slate-200">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="grid grid-cols-4 gap-3 rounded-xl border border-white/5 bg-surface-950/40 p-3">
+          <Stat label="Last" value={fmtNum(last.v)} />
+          <Stat label="Min" value={fmtNum(min)} />
+          <Stat label="Max" value={fmtNum(max)} />
+          <Stat label="Avg" value={fmtNum(avg)} />
+        </div>
+        <div className="mt-3 rounded-xl border border-white/5 bg-surface-950/40 p-3">
+          <svg viewBox={`0 0 ${W} ${H}`} className="h-64 w-full" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="histFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.35" />
+                <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {[0.25, 0.5, 0.75].map((f) => (
+              <line key={f} x1={padL} x2={W - padR} y1={padY + f * (H - padY * 2)} y2={padY + f * (H - padY * 2)} stroke="#ffffff" strokeOpacity="0.05" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            ))}
+            <path d={area} fill="url(#histFill)" />
+            <path d={line} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+            <circle cx={x(last.ts)} cy={y(last.v)} r="3.5" fill="#38bdf8" />
+          </svg>
+          <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
+            <span>{new Date(t0).toLocaleTimeString()}</span>
+            <span>{points.length} points · from the live message ring</span>
+            <span>{new Date(t1).toLocaleTimeString()}</span>
+          </div>
+        </div>
       </div>
     </div>
   );
