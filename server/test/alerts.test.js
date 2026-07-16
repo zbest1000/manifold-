@@ -172,6 +172,36 @@ test('value-threshold sustainMs holds firing until the breach persists continuou
   eng.stop();
 });
 
+test('value-threshold keeps independent state per concrete topic under a wildcard', () => {
+  // Regression: a wildcard rule used to share ONE sustain/firing machine across
+  // every matched topic, so a normal reading on one topic reset another topic's
+  // sustain clock and suppressed a real, sustained breach.
+  const rules = [{ id: 'vw', type: 'value-threshold', brokerId: 'b1', topic: 'plant/+/temp', op: '>', value: 80, sustainMs: 30 }];
+  const { eng, io } = valueEngine(rules);
+  const t0 = Date.now();
+
+  // Pump A is genuinely overheating and stays breached the whole time.
+  eng.onMessage(msg('b1', 'plant/A/temp', 95), t0);
+  // Pump B keeps reporting normal values that would reset a shared clock.
+  eng.onMessage(msg('b1', 'plant/B/temp', 20), t0 + 5);
+  eng.onMessage(msg('b1', 'plant/B/temp', 20), t0 + 15);
+  eng.onMessage(msg('b1', 'plant/A/temp', 96), t0 + 25);
+  assert.strictEqual(io.emitted.length, 0, 'A breach younger than sustainMs must not fire yet');
+
+  // A has now been continuously breached for > 30ms — it MUST fire, and cite A.
+  eng.onMessage(msg('b1', 'plant/A/temp', 97), t0 + 40);
+  assert.strictEqual(io.emitted.length, 1, "A's sustained breach must fire despite B's normal readings");
+  assert.strictEqual(io.emitted[0].data.status, 'firing');
+  assert.strictEqual(io.emitted[0].data.topic, 'plant/A/temp');
+
+  // Resolving A must cite A, not B.
+  eng.onMessage(msg('b1', 'plant/A/temp', 10), t0 + 50);
+  assert.strictEqual(io.emitted.length, 2);
+  assert.strictEqual(io.emitted[1].data.status, 'resolved');
+  assert.strictEqual(io.emitted[1].data.topic, 'plant/A/temp');
+  eng.stop();
+});
+
 test('value-threshold extracts nested fields via dot-path', () => {
   const rules = [{ id: 'v3', type: 'value-threshold', brokerId: 'b1', topic: 'machine/state', field: 'data.temp', op: '<', value: 10 }];
   const { manager, io, eng } = valueEngine(rules);

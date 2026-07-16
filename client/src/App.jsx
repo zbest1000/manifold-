@@ -16,6 +16,7 @@ const OpcUa = lazy(() => import('./pages/OpcUa'));
 const Cesmii = lazy(() => import('./pages/Cesmii'));
 const I3x = lazy(() => import('./pages/I3x'));
 const Discovery2 = lazy(() => import('./pages/Discovery'));
+const System = lazy(() => import('./pages/System'));
 const Settings2 = lazy(() => import('./pages/Settings'));
 
 const Loading = () => <div className="grid h-full place-items-center text-sm text-slate-500">Loading…</div>;
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="cesmii" element={<S><Cesmii /></S>} />
         <Route path="i3x" element={<S><I3x /></S>} />
         <Route path="discovery" element={<S><Discovery2 /></S>} />
+        <Route path="system" element={<S><System /></S>} />
         <Route path="settings" element={<S><Settings2 /></S>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

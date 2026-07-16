@@ -14,9 +14,12 @@ function filterToRegex(filter) {
   parts.forEach((p, i) => {
     const last = i === parts.length - 1;
     if (p === '#') {
-      // '#' matches this level and everything below (including nothing)
+      // '#' matches this level and everything below (including nothing). A bare
+      // '#' (first and only segment) is the match-everything wildcard — the most
+      // common real subscription — so it must match ANY topic, not just '' or
+      // '/...'. Deeper '#' (e.g. 'a/#') keeps the optional-subtree form.
       pattern = pattern.replace(/\/$/, '');
-      pattern += '(/.*)?';
+      pattern += i === 0 ? '.*' : '(/.*)?';
     } else {
       pattern += (p === '+' ? '[^/]+' : escapeRe(p)) + (last ? '' : '/');
     }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil, Radar, ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
@@ -152,16 +152,23 @@ export default function OpcUa() {
     }
   };
 
-  const expandNode = async (node) => {
-    const nodeId = node.meta?.nodeId;
-    if (!nodeId || expanded.has(nodeId)) return;
-    try {
-      const res = await api.opcuaBrowse(connectionId, nodeId);
-      setExpanded((prev) => new Map(prev).set(nodeId, res.references));
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
+  // Memoized so the graph's onExpand prop is a fresh closure over the CURRENT
+  // connectionId whenever it changes — the ForceGraph ref fix reads the latest
+  // prop, so a stable-but-current identity keeps the two in step (double-click
+  // after switching servers browses the right server).
+  const expandNode = useCallback(
+    async (node) => {
+      const nodeId = node.meta?.nodeId;
+      if (!nodeId || expanded.has(nodeId)) return;
+      try {
+        const res = await api.opcuaBrowse(connectionId, nodeId);
+        setExpanded((prev) => new Map(prev).set(nodeId, res.references));
+      } catch (e) {
+        toast.error(e.message);
+      }
+    },
+    [connectionId, expanded]
+  );
 
   const disconnect = async (id) => {
     try {

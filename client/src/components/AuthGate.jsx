@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Lock, KeyRound } from 'lucide-react';
-import { getAuthToken, setAuthToken } from '@/lib/api';
+import { getAuthToken, setAuthToken, api } from '@/lib/api';
 import { reconnectSocket } from '@/lib/socket';
+import { useStore } from '@/store/store';
 import { Card, Button, Input } from '@/components/ui';
 
 /**
@@ -15,15 +16,37 @@ export default function AuthGate({ children }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState(null);
 
+  const setAuthRole = useStore((s) => s.setAuthRole);
+
+  // Only a 401 means "locked": any other status (or a network error) is NOT a
+  // rejected token, so we open rather than hang on "Connecting…" forever or lock
+  // out a user because the status endpoint blipped.
   const probe = async (candidate) => {
-    const res = await fetch('/api/system/status', {
-      headers: candidate ? { Authorization: `Bearer ${candidate}` } : {}
-    });
-    return res.status !== 401;
+    try {
+      const res = await fetch('/api/system/status', {
+        headers: candidate ? { Authorization: `Bearer ${candidate}` } : {}
+      });
+      return res.status !== 401;
+    } catch {
+      return true; // network/transport error — don't trap the user on the gate
+    }
+  };
+
+  // Discover the caller's role so the UI can show a read-only badge for viewers.
+  const loadRole = async () => {
+    try {
+      const who = await api.whoami();
+      setAuthRole(who?.role ?? null);
+    } catch {
+      setAuthRole(null);
+    }
   };
 
   useEffect(() => {
-    probe(getAuthToken()).then((ok) => setState(ok ? 'open' : 'locked'));
+    probe(getAuthToken()).then((ok) => {
+      if (ok) loadRole();
+      setState(ok ? 'open' : 'locked');
+    });
   }, []);
 
   const unlock = async (e) => {
@@ -32,6 +55,7 @@ export default function AuthGate({ children }) {
     if (await probe(token.trim())) {
       setAuthToken(token.trim());
       reconnectSocket();
+      await loadRole();
       setState('open');
     } else {
       setError('That token was rejected by the server.');

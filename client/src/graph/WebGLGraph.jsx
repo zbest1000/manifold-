@@ -28,6 +28,10 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
   const transformRef = useRef({ x: 0, y: 0, k: 1 });
   const sizeRef = useRef({ w: 0, h: 0 });
   const selectedRef = useRef(null);
+  const drawRef = useRef(() => {});
+  // Latest onSelect for the mount-once interaction effect (see ForceGraph note).
+  const cbRef = useRef({});
+  cbRef.current = { onSelect };
 
   const style = GRAPH_STYLES[styleId] || GRAPH_STYLES.constellation;
   const colorFor = useCallback(
@@ -264,6 +268,12 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
     draw();
   }, [labelDensity, draw]);
 
+  // Keep the interaction effect's draw fresh without re-running it on every
+  // draw identity change.
+  useEffect(() => {
+    drawRef.current = draw;
+  }, [draw]);
+
   // Sizing + interaction (once).
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -290,7 +300,7 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
         centered = true;
         fitAll();
       }
-      draw();
+      drawRef.current();
     };
 
     resize();
@@ -326,13 +336,13 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
       moved += Math.abs(dx) + Math.abs(dy);
       transformRef.current.x += dx;
       transformRef.current.y += dy;
-      draw();
+      drawRef.current();
     };
     const onUp = (e) => {
       if (dragging && moved < 6) {
         const { x, y } = toGraph(e.clientX, e.clientY);
         const hit = pickFromGrid(x, y, gridRef.current);
-        if (hit && onSelect) onSelect(hit);
+        if (hit && cbRef.current.onSelect) cbRef.current.onSelect(hit);
       }
       dragging = false;
     };
@@ -349,7 +359,7 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
       t.x = px - (px - t.x) * (nk / t.k);
       t.y = py - (py - t.y) * (nk / t.k);
       t.k = nk;
-      draw();
+      drawRef.current();
     };
 
     canvas.addEventListener('pointerdown', onDown);

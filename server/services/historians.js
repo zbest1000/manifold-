@@ -1,5 +1,13 @@
 'use strict';
 
+const { fetchWithTimeout } = require('./httpTimeout');
+
+// All historian HTTP calls get a hard deadline: a wedged historian (TCP accepts,
+// never responds) must degrade to an error, not hang the store-and-forward
+// outbox or a historian route for undici's multi-minute default.
+const HISTORIAN_TIMEOUT_MS = Number(process.env.MANIFOLD_HISTORIAN_TIMEOUT_MS) || 15_000;
+const timedFetch = (url, opts) => fetchWithTimeout(url, opts, HISTORIAN_TIMEOUT_MS);
+
 /**
  * Historian integrations — time-series targets for pipelines and the recorder.
  *
@@ -156,7 +164,15 @@ function pgEntryFor(conn) {
         database: conn.database,
         user: conn.user,
         password: conn.password || undefined,
-        ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+        // TLS verifies the server certificate by default; opting into ssl must
+        // not silently downgrade to accept-any-cert (which lets an on-path
+        // attacker MITM the DB auth + forwarded data). conn.sslInsecure is the
+        // explicit, UI-labellable escape hatch; conn.sslRootCert supplies a CA.
+        ssl: conn.ssl
+          ? conn.sslInsecure
+            ? { rejectUnauthorized: false }
+            : { rejectUnauthorized: true, ...(conn.sslRootCert ? { ca: conn.sslRootCert } : {}) }
+          : undefined,
         max: 4,
         // Bounded waits: pg's defaults block FOREVER on an unreachable host,
         // which turns "database down" into a hung process (seen as CI jobs
@@ -463,7 +479,7 @@ const SERIES_QUERY_BACKENDS = {
 };
 
 /** List distinct topic/tag names stored in a historian. */
-async function queryTags(conn = {}, { search = '', limit = 100 } = {}, fetchImpl = globalThis.fetch) {
+async function queryTags(conn = {}, { search = '', limit = 100 } = {}, fetchImpl = timedFetch) {
   const backend = TAG_QUERY_BACKENDS[conn.type];
   if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
   const lim = Math.min(1000, Math.max(1, Math.round(Number(limit) || 100)));
@@ -471,7 +487,7 @@ async function queryTags(conn = {}, { search = '', limit = 100 } = {}, fetchImpl
 }
 
 /** Read downsampled series for up to 10 tags over a time range. */
-async function querySeries(conn = {}, { tags = [], start, end, maxPoints = 1000 } = {}, fetchImpl = globalThis.fetch) {
+async function querySeries(conn = {}, { tags = [], start, end, maxPoints = 1000 } = {}, fetchImpl = timedFetch) {
   const backend = SERIES_QUERY_BACKENDS[conn.type];
   if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
   if (!Array.isArray(tags) || tags.length < 1 || tags.length > 10 || tags.some((t) => typeof t !== 'string' || !t.trim())) {
@@ -489,7 +505,7 @@ async function closePools() {
 
 const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, timescaledb: timescaleWrite };
 
-async function writePoints(conn = {}, points = [], fetchImpl = globalThis.fetch) {
+async function writePoints(conn = {}, points = [], fetchImpl = timedFetch) {
   const backend = BACKENDS[conn.type];
   if (!backend) throw new Error(`unsupported historian type "${conn.type}" (supported: ${Object.keys(BACKENDS).join(', ')})`);
   // timescaledb talks Postgres, not HTTP — only the HTTP backends need fetch

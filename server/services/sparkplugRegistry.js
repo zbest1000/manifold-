@@ -16,6 +16,11 @@ const SparkplugDecoder = require('./sparkplugDecoder');
  * are real publishing endpoints, not just topic strings.
  */
 const MAX_EVENTS = 2000;
+// Bounds against untrusted broker traffic: a hostile/misbehaving publisher can
+// otherwise drive per-endpoint metric sets or the endpoint tree to grow without
+// limit (payload-driven, so the topic cap doesn't bound it) and OOM the process.
+const MAX_METRICS_PER_ENDPOINT = 5000;
+const MAX_ENDPOINTS = 50_000; // edges + devices across all groups
 
 class SparkplugRegistry {
   constructor() {
@@ -23,6 +28,9 @@ class SparkplugRegistry {
     this.hosts = new Map(); // hostId -> { id, online, timestamp, lastSeen, msgCount }
     this.lastUpdate = 0;
     this.events = []; // bounded ring of BIRTH/DEATH lifecycle events
+    this.endpointCount = 0; // edges + devices (bounded by MAX_ENDPOINTS)
+    this.droppedEndpoints = 0; // endpoints refused past the cap
+    this.metricOverflows = 0; // endpoints that hit MAX_METRICS_PER_ENDPOINT
   }
 
   _event(evt) {
@@ -42,8 +50,13 @@ class SparkplugRegistry {
   _edge(group, id) {
     let e = group.edgeNodes.get(id);
     if (!e) {
-      e = { id, online: false, lastBirth: null, lastDeath: null, lastSeen: null, msgCount: 0, metrics: new Set(), devices: new Map() };
+      if (this.endpointCount >= MAX_ENDPOINTS) {
+        this.droppedEndpoints++;
+        return null;
+      }
+      e = { id, online: false, lastBirth: null, lastDeath: null, lastSeen: null, msgCount: 0, metrics: new Set(), aliasMap: new Map(), devices: new Map() };
       group.edgeNodes.set(id, e);
+      this.endpointCount++;
     }
     return e;
   }
@@ -51,10 +64,29 @@ class SparkplugRegistry {
   _device(edge, id) {
     let d = edge.devices.get(id);
     if (!d) {
-      d = { id, online: false, lastBirth: null, lastDeath: null, lastSeen: null, msgCount: 0, metrics: new Set() };
+      if (this.endpointCount >= MAX_ENDPOINTS) {
+        this.droppedEndpoints++;
+        return null;
+      }
+      d = { id, online: false, lastBirth: null, lastDeath: null, lastSeen: null, msgCount: 0, metrics: new Set(), aliasMap: new Map() };
       edge.devices.set(id, d);
+      this.endpointCount++;
     }
     return d;
+  }
+
+  // Add a metric name to an endpoint's set, bounded so a stream of unique names
+  // from one topic's payloads can't grow it without limit.
+  _addMetric(target, name) {
+    if (target.metrics.has(name)) return;
+    if (target.metrics.size >= MAX_METRICS_PER_ENDPOINT) {
+      if (!target.metricsOverflow) {
+        target.metricsOverflow = true;
+        this.metricOverflows++;
+      }
+      return;
+    }
+    target.metrics.add(name);
   }
 
   _host(id) {
@@ -118,11 +150,13 @@ class SparkplugRegistry {
 
     const group = this._group(info.groupId);
     const edge = this._edge(group, info.edgeNodeId);
+    if (!edge) return; // endpoint cap reached — drop-and-count (see _edge)
     edge.lastSeen = ts;
     edge.msgCount++;
 
     const type = info.messageType;
     const target = info.deviceId ? this._device(edge, info.deviceId) : edge;
+    if (!target) return; // device endpoint cap reached
     if (info.deviceId) {
       target.lastSeen = ts;
       target.msgCount++;
@@ -161,13 +195,56 @@ class SparkplugRegistry {
       }
     }
 
-    // Collect the metric names this endpoint publishes (BIRTH defines them; DATA
-    // reaffirms them). This is the "publishes what" for the endpoint.
-    if (decoded && Array.isArray(decoded.metrics)) {
+    // Learn alias -> name from BIRTH certificates, which carry both. This is the
+    // standard Sparkplug bandwidth optimization: NBIRTH/DBIRTH send {name, alias}
+    // once, then NDATA/DDATA send {alias} only. Without this map every
+    // alias-only DATA metric decodes with an empty name and is lost.
+    if ((type === 'NBIRTH' || type === 'DBIRTH') && decoded && Array.isArray(decoded.metrics)) {
       for (const m of decoded.metrics) {
-        if (m && m.name) target.metrics.add(m.name);
+        if (m && m.name && m.alias !== undefined && m.alias !== null && target.aliasMap.size < MAX_METRICS_PER_ENDPOINT) {
+          target.aliasMap.set(String(m.alias), m.name);
+        }
       }
     }
+
+    // Collect the metric names this endpoint publishes (BIRTH defines them; DATA
+    // reaffirms them), resolving alias-only DATA metrics through the learned map.
+    if (decoded && Array.isArray(decoded.metrics)) {
+      for (const m of decoded.metrics) {
+        if (!m) continue;
+        let name = m.name;
+        if (!name && m.alias !== undefined && m.alias !== null) {
+          name = target.aliasMap.get(String(m.alias));
+        }
+        if (name) this._addMetric(target, name);
+      }
+    }
+  }
+
+  /**
+   * Stamp resolved names onto a decoded metrics array in place, using the
+   * endpoint's learned alias map. Called by the manager on messageObj.sparkplug
+   * before the DataOps tap emit, so pipelines / sparkplugFlatten see real metric
+   * names instead of collapsing every alias-only metric into the empty-name key.
+   */
+  resolveMetricNames(topic, metrics) {
+    if (!Array.isArray(metrics) || !metrics.length) return metrics;
+    const info = SparkplugDecoder.parseSparkplugTopic(topic);
+    if (!info || info.messageType === 'STATE') return metrics;
+    const edge = this.groups.get(info.groupId)?.edgeNodes.get(info.edgeNodeId);
+    if (!edge) return metrics;
+    const target = info.deviceId ? edge.devices.get(info.deviceId) : edge;
+    if (!target || !target.aliasMap.size) return metrics;
+    for (const m of metrics) {
+      if (m && !m.name && m.alias !== undefined && m.alias !== null) {
+        const name = target.aliasMap.get(String(m.alias));
+        if (name) {
+          m.name = name;
+          m.nameResolved = true;
+        }
+      }
+    }
+    return metrics;
   }
 
   /** Serializable snapshot of the whole topology. */
@@ -227,7 +304,11 @@ class SparkplugRegistry {
         devices: deviceCount,
         hosts: hosts.length,
         online: onlineCount,
-        lastUpdate: this.lastUpdate
+        lastUpdate: this.lastUpdate,
+        // Surface the safety bounds when they bite, so truncation is visible
+        // rather than silent.
+        ...(this.droppedEndpoints ? { droppedEndpoints: this.droppedEndpoints } : {}),
+        ...(this.metricOverflows ? { metricOverflows: this.metricOverflows } : {})
       }
     };
   }

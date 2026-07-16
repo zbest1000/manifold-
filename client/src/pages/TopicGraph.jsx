@@ -562,6 +562,12 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
   };
 
   const deleteRetained = async () => {
+    // This publishes an empty retained message to the LIVE broker — every other
+    // consumer of this topic loses its retained value (device configs, Sparkplug
+    // STATE, last-known values). Confirm the exact topic first.
+    if (!window.confirm(`Clear the retained message on "${fullTopic}"?\n\nThis publishes an empty retained payload to the broker. Every other client subscribed to this topic will lose its retained value.`)) {
+      return;
+    }
     try {
       await api.publish(brokerId, fullTopic, '', { retain: true });
       toast.success('Cleared retained message');

@@ -69,9 +69,19 @@ const ForceGraph = forwardRef(function ForceGraph(
   const drawRef = useRef(() => {});
   const bigRef = useRef(false);
   const gridRef = useRef(null);
+  const fittedRef = useRef(false); // fit-to-view once, when nodes first appear
+  const fitToRef = useRef(() => {}); // latest fitTo, set below (avoids TDZ in the sim effect)
 
   const style = GRAPH_STYLES[styleId] || GRAPH_STYLES.constellation;
   const layout = LAYOUTS[layoutId] || LAYOUTS.organic;
+
+  // Props the mount-once interaction effect needs at CALL time, not mount time.
+  // Captured plainly, the zoom/pointer handlers keep the FIRST render's onSelect/
+  // onExpand/style forever — so double-clicking a node after switching OPC UA
+  // servers browsed the wrong (old) server, and style/selection changes didn't
+  // repaint on interaction. Refreshed every render, read via cbRef.current.
+  const cbRef = useRef({});
+  cbRef.current = { onSelect, onExpand, style };
 
   const colorFor = useCallback(
     (n) => (colorByProtocol && n.protocol ? PROTOCOL_COLORS[n.protocol] || style.palette[0] : groupColor(n.group, style.palette)),
@@ -363,13 +373,25 @@ const ForceGraph = forwardRef(function ForceGraph(
     // thousands of nodes is infeasible. Place nodes with a deterministic radial
     // tree (O(n)), build a spatial grid for hit-testing, and rely on viewport
     // culling in draw(). Pan/zoom stay smooth; node dragging is disabled.
+    // Auto-fit the first time real nodes appear so the graph is centered and
+    // fully in view on load, instead of showing a cluster at origin-scale that
+    // the user has to pan/zoom to find. Guarded so it never fights later panning.
+    const autoFit = () => {
+      if (fittedRef.current || !nodesRef.current.length) return;
+      fittedRef.current = true;
+      fitToRef.current();
+    };
+
     const big = nodes.length > 4000;
     bigRef.current = big;
     if (big) {
       radialTreeLayout(nodes, links, depth);
       buildGrid(nodes, gridRef);
       simRef.current = null;
-      requestAnimationFrame(() => draw());
+      requestAnimationFrame(() => {
+        draw();
+        autoFit(); // positions are final immediately for the big radial layout
+      });
       return undefined;
     }
 
@@ -411,6 +433,9 @@ const ForceGraph = forwardRef(function ForceGraph(
         .force('y', forceY(0).strength(layout.gravity));
     }
 
+    // Fit once the force layout has settled (nodes start clustered at origin, so
+    // fitting immediately would frame a dot); 'end' fires when alpha decays out.
+    sim.on('end', autoFit);
     simRef.current = sim;
     return () => sim.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -539,6 +564,10 @@ const ForceGraph = forwardRef(function ForceGraph(
     draw();
   }, [draw]);
 
+  useEffect(() => {
+    fitToRef.current = fitTo;
+  }, [fitTo]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -566,7 +595,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       .scaleExtent([0.05, 8])
       .on('zoom', (event) => {
         transformRef.current = event.transform;
-        draw();
+        drawRef.current();
       });
     zoomRef.current = zoomBehavior;
     sel.call(zoomBehavior);
@@ -586,7 +615,7 @@ const ForceGraph = forwardRef(function ForceGraph(
         transformRef.current = initial;
         sel.call(zoomBehavior.transform, initial);
       }
-      draw();
+      drawRef.current();
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -599,12 +628,13 @@ const ForceGraph = forwardRef(function ForceGraph(
     };
 
     const pick = (gx, gy) => {
+      const curStyle = cbRef.current.style;
       // Big graphs use the spatial grid; smaller ones scan linearly.
-      if (bigRef.current && gridRef.current) return pickFromGrid(gx, gy, gridRef.current, style);
+      if (bigRef.current && gridRef.current) return pickFromGrid(gx, gy, gridRef.current, curStyle);
       const nodes = nodesRef.current;
       for (let i = nodes.length - 1; i >= 0; i--) {
         const n = nodes[i];
-        const r = nodeRadius(n, style) + 6;
+        const r = nodeRadius(n, curStyle) + 6;
         if ((n.x - gx) ** 2 + (n.y - gy) ** 2 <= r * r) return n;
       }
       return null;
@@ -652,12 +682,12 @@ const ForceGraph = forwardRef(function ForceGraph(
       if (moved > 5) return;
       const { x, y } = toGraphCoords(e);
       const hit = pick(x, y);
-      if (hit && onSelect) onSelect(hit);
+      if (hit && cbRef.current.onSelect) cbRef.current.onSelect(hit);
     };
     const onDblClick = (e) => {
       const { x, y } = toGraphCoords(e);
       const hit = pick(x, y);
-      if (hit && onExpand) onExpand(hit);
+      if (hit && cbRef.current.onExpand) cbRef.current.onExpand(hit);
     };
     const onMove = (e) => {
       const { x, y } = toGraphCoords(e);
@@ -665,7 +695,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       if (hit !== hoverRef.current) {
         hoverRef.current = hit;
         canvas.style.cursor = hit ? 'pointer' : 'grab';
-        draw();
+        drawRef.current();
       }
     };
 

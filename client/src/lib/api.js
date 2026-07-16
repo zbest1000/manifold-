@@ -48,8 +48,21 @@ async function request(path, options = {}) {
   return body;
 }
 
+// Fetch the Prometheus /metrics exposition as raw text (it lives outside /api
+// and stays token-optional for scrapers; we attach the token anyway if present).
+async function metricsText() {
+  const token = getAuthToken();
+  const res = await fetch('/metrics', {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+  if (!res.ok) throw new Error(`metrics fetch failed (${res.status})`);
+  return res.text();
+}
+
 export const api = {
   systemStatus: () => request('/api/system/status'),
+  whoami: () => request('/api/whoami'),
+  metricsText,
 
   // MQTT
   listBrokers: () => request('/api/mqtt/brokers'),
@@ -114,6 +127,11 @@ export const api = {
   recordingData: (id, params = {}) => {
     const q = new URLSearchParams(params).toString();
     return request(`/api/recorder/${encodeURIComponent(id)}/data${q ? `?${q}` : ''}`);
+  },
+  // Downsampled numeric series for Trends. tags: string[], from/to: epoch ms.
+  recordingSeries: (id, { tags = [], from, to, maxPoints = 1000 } = {}) => {
+    const q = new URLSearchParams({ tags: tags.join(','), from, to, maxPoints }).toString();
+    return request(`/api/recorder/${encodeURIComponent(id)}/series?${q}`);
   },
   startReplay: (body) => request('/api/recorder/replay', { method: 'POST', body: JSON.stringify(body) }),
   stopReplay: () => request('/api/recorder/replay', { method: 'DELETE' }),

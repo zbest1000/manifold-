@@ -2,7 +2,10 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 require('dotenv').config();
 
@@ -20,7 +23,7 @@ const Replayer = require('./services/replayer');
 const { SchemaContracts } = require('./services/schemaContracts');
 const ModelEngine = require('./services/modelEngine');
 const HistorianOutbox = require('./services/historianOutbox');
-const { AuditLog } = require('./services/auditLog');
+const { AuditLog, redact } = require('./services/auditLog');
 const metricsExporter = require('./services/metricsExporter');
 const SparkplugPublisher = require('./services/sparkplugPublisher');
 const { TagBindings } = require('./services/tagBindings');
@@ -52,7 +55,30 @@ const io = socketIo(server, {
 // grants are needed at all; in dev the Vite server's origin gets access.
 // A blanket cors() would let any website script an authenticated browser.
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000' }));
+
+// Security headers. contentSecurityPolicy is disabled by default because the
+// Vite dev client and the built SPA differ; the served bundle is same-origin and
+// self-contained. crossOriginResourcePolicy is relaxed so the dev client on a
+// different port can still load assets.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+  })
+);
+
 app.use(express.json({ limit: '10mb' }));
+
+// General request rate limit — a coarse backstop against resource abuse (scan
+// spam, wildcard-resolution floods) that the auth-failure bucket does not cover.
+// Applies to the whole API; /metrics and /health stay unlimited for scrapers.
+const apiLimiter = rateLimit({
+  windowMs: Number(process.env.MANIFOLD_RATE_WINDOW_MS) || 60_000,
+  max: Number(process.env.MANIFOLD_RATE_MAX) || 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — slow down' }
+});
 
 // ---- Authentication + roles -------------------------------------------------
 // This is a CONTROL PLANE, not a viewer: the API can publish to brokers
@@ -116,12 +142,23 @@ function authFailureExceeded(ip) {
   return e.count > AUTH_FAIL_LIMIT;
 }
 
-app.use('/api', (req, res, next) => {
+// Shared auth check used by BOTH the REST middleware and the Socket.IO
+// handshake so the brute-force throttle and failure accounting can never drift
+// between the two entry points (they used to — the socket path had neither).
+// Returns { identity } on success or { throttled } / {} on failure.
+function checkAuth(token, ip) {
+  const identity = identityForToken(token);
+  if (identity) return { identity };
+  const throttled = authFailureExceeded(ip);
+  return { throttled };
+}
+
+app.use('/api', apiLimiter, (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const identity = identityForToken(token);
+  const { identity, throttled } = checkAuth(token, req.ip);
   if (!identity) {
-    if (authFailureExceeded(req.ip)) {
+    if (throttled) {
       return res.status(429).json({ error: 'Too many failed authentication attempts — wait a minute' });
     }
     return res.status(401).json({ error: 'Unauthorized: missing or invalid bearer token' });
@@ -134,8 +171,13 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/dist')));
+// Serve the built SPA whenever it exists on disk — not gated on NODE_ENV, which
+// nothing outside Docker sets, so `npm run build && npm start` used to yield a
+// blank "Cannot GET /". A built client/dist is the signal, not an env var.
+const clientDist = path.join(__dirname, '../client/dist');
+const serveClient = fs.existsSync(path.join(clientDist, 'index.html'));
+if (serveClient) {
+  app.use(express.static(clientDist));
 }
 
 const mqttManager = new MqttManager(io);
@@ -239,6 +281,17 @@ app.use('/api/contracts', contractRoutes);
 app.use('/api/models', modelRoutes);
 app.use('/api/tags', tagRoutes);
 
+// GET /api/whoami — lets the client discover whether auth is on and what role
+// the caller holds, so the UI can render a read-only badge and disable mutation
+// controls for viewers instead of letting every click 403.
+app.get('/api/whoami', (req, res) => {
+  res.json({
+    authEnabled: AUTH_ENABLED,
+    role: req.role,
+    ...(req.tokenName && req.tokenName !== 'open' ? { tokenName: req.tokenName } : {})
+  });
+});
+
 // GET /api/audit — recent mutating actions, newest first (admin only)
 app.get('/api/audit', (req, res) => {
   if (req.role === 'viewer') return res.status(403).json({ error: 'Forbidden' });
@@ -262,9 +315,16 @@ app.get('/metrics', (req, res) => {
 });
 
 io.use((socket, next) => {
-  const role = roleForToken(socket.handshake.auth?.token);
-  if (!role) return next(new Error('Unauthorized'));
-  socket.data.role = role;
+  const ip = socket.handshake.address;
+  const { identity, throttled } = checkAuth(socket.handshake.auth?.token, ip);
+  if (!identity) {
+    // Same throttle + audit trail as the REST path, so websocket handshakes
+    // can't be used to sidestep the brute-force limiter or evade logging.
+    audit.record({ role: 'none', ip, method: 'SOCKET', path: 'handshake', outcome: throttled ? 'throttled' : 'unauthorized' });
+    return next(new Error(throttled ? 'Too many failed authentication attempts' : 'Unauthorized'));
+  }
+  socket.data.role = identity.role;
+  socket.data.tokenName = identity.tokenName;
   next();
 });
 
@@ -282,7 +342,22 @@ io.on('connection', (socket) => {
       socket.emit('error-message', { error: `viewer token is read-only ("${packet[0]}" denied)` });
       return; // drop the packet
     }
-    audit.record({ role: socket.data.role || 'open', ip: socket.handshake.address, method: 'SOCKET', path: packet[0] });
+    // Full-fidelity audit: include a redacted copy of the event args (brokerId,
+    // topic, ...) so a socket-path publish is as traceable as its REST twin.
+    let summary;
+    try {
+      summary = packet[1] && typeof packet[1] === 'object' ? JSON.stringify(redact(packet[1])).slice(0, 400) : undefined;
+    } catch {
+      summary = '[unserializable]';
+    }
+    audit.record({
+      role: socket.data.role || 'open',
+      ...(socket.data.tokenName && socket.data.tokenName !== 'open' ? { tokenName: socket.data.tokenName } : {}),
+      ip: socket.handshake.address,
+      method: 'SOCKET',
+      path: packet[0],
+      ...(summary ? { body: summary } : {})
+    });
     next();
   });
 
@@ -357,21 +432,36 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-if (process.env.NODE_ENV === 'production') {
+if (serveClient) {
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+    res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Manifold server listening on port ${PORT}`);
+// Fail closed: with no auth token configured the control plane binds loopback
+// only, so an accidentally-open instance is reachable solely from its own host.
+// Exposing an unauthenticated instance beyond localhost is now a deliberate act:
+// set MANIFOLD_HOST=0.0.0.0 explicitly (and you'll be warned). With auth on, the
+// default is all interfaces as before.
+const HOST = process.env.MANIFOLD_HOST || (AUTH_ENABLED ? '0.0.0.0' : '127.0.0.1');
+server.listen(PORT, HOST, () => {
+  console.log(`Manifold server listening on ${HOST}:${PORT}`);
   if (!AUTH_ENABLED) {
-    console.warn(
-      '⚠️  MANIFOLD_AUTH_TOKEN is not set — the API and socket are UNAUTHENTICATED. ' +
-        'Anyone who can reach this port can publish to brokers and start scans. ' +
-        'Set MANIFOLD_AUTH_TOKEN before exposing this beyond localhost.'
-    );
+    if (HOST === '127.0.0.1' || HOST === 'localhost') {
+      console.warn(
+        '⚠️  MANIFOLD_AUTH_TOKEN is not set — bound to localhost only. ' +
+          'Set MANIFOLD_AUTH_TOKEN to require a token, or MANIFOLD_HOST=0.0.0.0 to expose ' +
+          'this UNAUTHENTICATED instance to the network (anyone who can reach it can publish ' +
+          'to brokers and start scans).'
+      );
+    } else {
+      console.warn(
+        `🚨  MANIFOLD_AUTH_TOKEN is not set but the server is bound to ${HOST} — the API and ` +
+          'socket are UNAUTHENTICATED and reachable off-host. Anyone who can reach this port ' +
+          'can publish to brokers and start network scans. Set MANIFOLD_AUTH_TOKEN NOW.'
+      );
+    }
   }
 });
 

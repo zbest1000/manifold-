@@ -50,6 +50,24 @@ test('metric names accumulate across BIRTH and DATA', () => {
   assert.strictEqual(dev.msgCount, 2);
 });
 
+test('alias-only DATA metrics resolve to names learned from BIRTH', () => {
+  // The standard Sparkplug bandwidth optimization: BIRTH sends {name, alias},
+  // DATA sends {alias} only. Before the fix these DATA metrics decoded with an
+  // empty name and were lost (registry recorded nothing; flatten collapsed them
+  // into the ''-key).
+  const r = new SparkplugRegistry();
+  r.update('spBv1.0/G/NBIRTH/E', { metrics: [{ name: 'Temp', alias: 3 }, { name: 'RPM', alias: 4 }] }, 1);
+  r.update('spBv1.0/G/NDATA/E', { metrics: [{ alias: 3, value: 99 }] }, 2);
+  const edge = r.toJSON().groups[0].edgeNodes[0];
+  assert.ok(edge.metrics.includes('Temp'), 'alias 3 on DATA must record as "Temp"');
+
+  // resolveMetricNames stamps the name onto the object the DataOps tap sees.
+  const metrics = [{ alias: 4, value: 1500 }];
+  r.resolveMetricNames('spBv1.0/G/NDATA/E', metrics);
+  assert.strictEqual(metrics[0].name, 'RPM');
+  assert.strictEqual(metrics[0].nameResolved, true);
+});
+
 test('non-Sparkplug topics are ignored', () => {
   const r = new SparkplugRegistry();
   r.update('factory/line1/temp', { metrics: [{ name: 'x' }] }, 1);

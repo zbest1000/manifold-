@@ -113,10 +113,17 @@ export default function Brokers() {
     setShowForm(true);
   };
 
-  const disconnect = async (id) => {
+  const disconnect = async (broker) => {
+    // This both drops the live connection AND deletes the saved profile
+    // (including any stored password) server-side — confirm before a misclick
+    // throws away credentials with no undo.
+    const label = broker.name || broker.host || broker.id;
+    if (!window.confirm(`Disconnect and remove broker "${label}"?\n\nThis deletes the saved connection profile (including its stored password). This cannot be undone.`)) {
+      return;
+    }
     try {
-      await api.disconnectBroker(id);
-      toast.success('Disconnected');
+      await api.disconnectBroker(broker.id);
+      toast.success('Disconnected and removed');
     } catch (e) {
       toast.error(e.message);
     }
@@ -338,7 +345,7 @@ export default function Brokers() {
                   >
                     <Pencil size={13} />
                   </button>
-                  <Button variant="danger" size="sm" onClick={() => disconnect(b.id)}>
+                  <Button variant="danger" size="sm" onClick={() => disconnect(b)}>
                     <Trash2 size={13} /> Disconnect
                   </Button>
                 </div>

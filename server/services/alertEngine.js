@@ -32,6 +32,10 @@ const { matchParts, compiledView } = require('./mqttMatch');
 const EVAL_MS = 15_000;
 const HISTORY_MAX = 500;
 const WEBHOOK_TIMEOUT_MS = 5_000;
+// A wildcard value-threshold rule keeps one state machine PER concrete topic it
+// matches; bound that fan-out so a rule over a huge namespace can't grow state
+// without limit. Oldest-inserted topic is evicted past the cap.
+const VALUE_STATE_MAX_TOPICS = 5000;
 
 const RULE_TYPES = ['branch-silent', 'topic-silent', 'new-topic', 'value-threshold'];
 
@@ -73,7 +77,8 @@ class AlertEngine {
     this.manager = mqttManager;
     this.fetchImpl = fetchImpl;
     this.intervalMs = intervalMs;
-    this.state = new Map(); // ruleId -> { firing, since, watermark }
+    this.state = new Map(); // ruleId -> { firing, since, watermark } (silence/new-topic rules)
+    this.valueState = new Map(); // ruleId -> Map(topic -> { firing, since, breachedSince, lastValue })
     this.history = []; // bounded ring, newest last
     this.timer = null;
     this.webhookFailures = 0;
@@ -122,6 +127,7 @@ class AlertEngine {
     const rules = this.profiles?.alertRules() || [];
     const liveIds = new Set(rules.map((r) => r.id));
     for (const id of this.state.keys()) if (!liveIds.has(id)) this.state.delete(id);
+    for (const id of this.valueState.keys()) if (!liveIds.has(id)) this.valueState.delete(id);
 
     for (const rule of rules) {
       try {
@@ -138,8 +144,33 @@ class AlertEngine {
   _ruleState(rule) {
     let s = this.state.get(rule.id);
     if (!s) {
-      s = { firing: false, since: 0, armed: false, watermark: 0, breachedSince: 0, lastValue: null };
+      // silence + new-topic rules only; value-threshold rules use _valueState.
+      s = { firing: false, since: 0, armed: false, watermark: 0 };
       this.state.set(rule.id, s);
+    }
+    return s;
+  }
+
+  /**
+   * Per-(rule, concrete topic) state for value-threshold rules. A wildcard rule
+   * like `plant/+/temp` must track each pump independently — sharing one state
+   * machine (the old bug) let a normal reading on one topic reset another's
+   * sustain clock, suppressing a real breach, and made 'resolved' events cite
+   * the wrong topic.
+   */
+  _valueState(rule, topic) {
+    let byTopic = this.valueState.get(rule.id);
+    if (!byTopic) {
+      byTopic = new Map();
+      this.valueState.set(rule.id, byTopic);
+    }
+    let s = byTopic.get(topic);
+    if (!s) {
+      if (byTopic.size >= VALUE_STATE_MAX_TOPICS) {
+        byTopic.delete(byTopic.keys().next().value); // evict oldest-inserted
+      }
+      s = { firing: false, since: 0, breachedSince: 0, lastValue: null };
+      byTopic.set(topic, s);
     }
     return s;
   }
@@ -238,7 +269,7 @@ class AlertEngine {
     const rule = entry.rule;
     const v = extractValue(msg.payload, entry.fieldParts);
     if (v === null) return; // non-numeric payload/field — not ours to judge
-    const s = this._ruleState(rule);
+    const s = this._valueState(rule, msg.topic);
     s.lastValue = v;
     const limit = Number(rule.value);
     const sustainMs = Number(rule.sustainMs) > 0 ? Number(rule.sustainMs) : 0;

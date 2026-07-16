@@ -3,6 +3,12 @@
 const fs = require('fs');
 const path = require('path');
 const historians = require('./historians');
+const { fetchWithTimeout } = require('./httpTimeout');
+
+// A wedged historian must not stall the whole sequential flush loop for undici's
+// multi-minute default and silently drop data for the healthy ones.
+const OUTBOX_TIMEOUT_MS = Number(process.env.MANIFOLD_HISTORIAN_TIMEOUT_MS) || 15_000;
+const timedFetch = (url, opts) => fetchWithTimeout(url, opts, OUTBOX_TIMEOUT_MS);
 
 /**
  * Historian outbox — store-and-forward for time-series writes.
@@ -26,7 +32,7 @@ const BATCH = 1000;
 const SPILL_MAX_BYTES = 20 * 1024 * 1024;
 
 class HistorianOutbox {
-  constructor({ profiles, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data'), fetchImpl = globalThis.fetch, spillMaxBytes = SPILL_MAX_BYTES }) {
+  constructor({ profiles, dir = process.env.MANIFOLD_DATA_DIR || path.join(__dirname, '..', 'data'), fetchImpl = timedFetch, spillMaxBytes = SPILL_MAX_BYTES }) {
     this.profiles = profiles;
     this.dir = path.join(dir, 'outbox');
     this.fetchImpl = fetchImpl;

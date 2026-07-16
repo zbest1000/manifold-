@@ -32,7 +32,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install server dependencies
         working-directory: server
-        run: npm install --no-audit --no-fund
+        run: npm ci
       - name: Run server tests
         working-directory: server
         run: npm test
@@ -48,7 +48,7 @@ jobs:
           node-version: 20.x
       - name: Install client dependencies
         working-directory: client
-        run: npm install --no-audit --no-fund
+        run: npm ci
       - name: Run client tests
         working-directory: client
         run: npm test
@@ -112,7 +112,7 @@ jobs:
           node-version: 22.x
       - name: Install server dependencies
         working-directory: server
-        run: npm install --no-audit --no-fund
+        run: npm ci
       - name: Wait for services
         # Waiting silently through a dead service just moves the failure into
         # the tests as a hang — fail HERE, by name, if anything never opens.
@@ -151,7 +151,27 @@ jobs:
           node-version: 20.x
       - name: Install MCP dependencies
         working-directory: mcp
-        run: npm install --no-audit --no-fund
+        run: npm ci
       - name: Verify MCP server starts and registers tools
         working-directory: mcp
         run: node --check index.js
+
+  audit:
+    name: Dependency audit (high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      # Gate on high/critical advisories only — moderate/low are reported by
+      # Dependabot without blocking every PR on transitive noise.
+      - name: Audit server
+        working-directory: server
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit client
+        working-directory: client
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit mcp
+        working-directory: mcp
+        run: npm audit --omit=dev --audit-level=high

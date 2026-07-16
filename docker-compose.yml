@@ -61,11 +61,18 @@ services:
       NODE_ENV: production
       PORT: "5000"
       MANIFOLD_DATA_DIR: /data
+      # Bind all interfaces INSIDE the container so the port mapping works; the
+      # host-side mapping below (127.0.0.1) is what keeps it off the network.
+      MANIFOLD_HOST: "0.0.0.0"
+      # This demo runs UNAUTHENTICATED. To expose it beyond this host you MUST
+      # set a token AND widen the port mapping below to "5000:5000".
       # MANIFOLD_AUTH_TOKEN: set-a-secret-to-require-auth
     volumes:
       - app-data:/data # persists connection profiles across restarts
     ports:
-      - "5000:5000" # open http://localhost:5000
+      # Host loopback only — reachable at http://localhost:5000 but NOT from other
+      # machines on the LAN. Widen to "5000:5000" only after setting a token.
+      - "127.0.0.1:5000:5000"
     depends_on:
       mqtt:
         condition: service_healthy

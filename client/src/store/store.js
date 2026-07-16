@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import toast from 'react-hot-toast';
 import { socket } from '@/lib/socket';
+import { api } from '@/lib/api';
 import { humanizeError } from '@/lib/humanizeError';
 import { DEFAULT_STYLE, DEFAULT_LAYOUT } from '@/graph/graphStyles';
 
@@ -93,6 +94,7 @@ function scheduleTick(store) {
 
 export const useStore = create((set, get) => ({
   connected: false,
+  authRole: null, // 'admin' | 'viewer' | null (unknown/open) — from /api/whoami
   brokers: [],
   opcua: [],
   discovery: { scanning: false, results: [], progress: null },
@@ -142,6 +144,7 @@ export const useStore = create((set, get) => ({
   },
 
   setConnected: (connected) => set({ connected }),
+  setAuthRole: (authRole) => set({ authRole }),
   setBrokers: (brokers) => set({ brokers }),
   setOpcua: (opcua) => set({ opcua }),
 
@@ -366,11 +369,13 @@ if (import.meta.env?.DEV && typeof window !== 'undefined') {
 }
 
 async function refreshOpcua() {
+  // Use the api client, not a raw fetch: it attaches the bearer token, so on an
+  // auth-enabled server this no longer 401s and wipes the OPC UA list to empty.
   try {
-    const res = await fetch('/api/opcua/connections');
-    const body = await res.json();
-    useStore.getState().setOpcua(body.connections || []);
-  } catch {
-    // ignore transient refresh failures
+    const body = await api.listOpcua();
+    useStore.getState().setOpcua(body?.connections || []);
+  } catch (error) {
+    // Don't clobber a good list on a transient failure — just log it.
+    useStore.getState().pushLog('warning', 'opcua', `OPC UA refresh failed: ${error.message}`);
   }
 }

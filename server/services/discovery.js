@@ -2,6 +2,7 @@ const net = require('net');
 const os = require('os');
 const mqtt = require('mqtt');
 const { EventEmitter } = require('events');
+const { isAllowedAddress } = require('./egressGuard');
 
 const DEFAULT_MQTT_PORTS = [1883, 8883];
 const DEFAULT_OPCUA_PORTS = [4840];
@@ -158,14 +159,27 @@ class DiscoveryService extends EventEmitter {
       ...i3xPorts.map((p) => ({ port: p, kind: 'i3x' }))
     ];
 
-    const hosts = this.expandCidr(range);
+    const allHosts = this.expandCidr(range);
+    // Every probe target passes the egress guard: loopback, link-local (incl.
+    // 169.254.169.254 cloud metadata), multicast and reserved space are always
+    // rejected; RFC1918 requires MANIFOLD_ALLOW_PRIVATE_TARGETS=1. This stops the
+    // scanner being used as an unauthenticated internal recon / SSRF pivot.
+    const hosts = allHosts.filter((host) => isAllowedAddress(host));
+    const blocked = allHosts.length - hosts.length;
+    if (hosts.length === 0) {
+      throw new Error(
+        `Every host in ${range} is a blocked target (loopback/link-local/reserved, ` +
+          `or RFC1918 without MANIFOLD_ALLOW_PRIVATE_TARGETS=1). Nothing to scan.`
+      );
+    }
+
     const jobs = [];
     hosts.forEach((host) => ports.forEach(({ port, kind }) => jobs.push({ host, port, kind })));
 
     this.scanning = true;
     this.abortRequested = false;
     this.lastResults = [];
-    this.io.emit('discovery-started', { range, ports: ports.map((p) => p.port), totalProbes: jobs.length });
+    this.io.emit('discovery-started', { range, ports: ports.map((p) => p.port), totalProbes: jobs.length, blockedHosts: blocked });
 
     let completed = 0;
     const results = [];
