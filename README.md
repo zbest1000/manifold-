@@ -81,9 +81,25 @@ Manifold is a control plane: it can publish to brokers, send Sparkplug commands,
 MANIFOLD_AUTH_TOKEN=$(openssl rand -hex 24) npm start
 ```
 
-With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role, and `MANIFOLD_TOKENS` (`name:token:role,…`) issues named, individually revocable tokens whose names appear in the audit trail. Failed authentication is rate-limited per IP. Without tokens the server runs open and warns at startup.
+With `MANIFOLD_AUTH_TOKEN` set, all API routes and the socket handshake require `Authorization: Bearer <token>`, and the UI shows an unlock screen. `MANIFOLD_VIEWER_TOKEN` adds an optional read-only role, and `MANIFOLD_TOKENS` (`name:token:role,…`) issues named, individually revocable tokens whose names appear in the audit trail. Failed authentication is rate-limited per IP (on both the REST and socket paths). Without a token the server **binds `127.0.0.1` only** and warns at startup — an unauthenticated instance is reachable off-host only if you set `MANIFOLD_HOST=0.0.0.0` deliberately.
 
 Connection profiles persist in `server/data/profiles.json` (mode 0600; directory configurable via `MANIFOLD_DATA_DIR`, restore disabled via `MANIFOLD_NO_RESTORE=1`). The file may contain broker credentials, so protect the host.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MANIFOLD_AUTH_TOKEN` | _(none — open)_ | Admin bearer token; when unset the server binds loopback only |
+| `MANIFOLD_VIEWER_TOKEN` | _(none)_ | Optional read-only token (GETs succeed, mutations 403) |
+| `MANIFOLD_TOKENS` | _(none)_ | Named revocable tokens: `alice:secret:admin,grafana:tok:viewer` |
+| `MANIFOLD_HOST` | `127.0.0.1` (open) / `0.0.0.0` (auth on) | Bind address; set to `0.0.0.0` to expose an open instance (not advised) |
+| `MANIFOLD_ALLOW_PRIVATE_TARGETS` | `0` | Allow the scanner and outbound HTTP clients to reach RFC1918/LAN targets. Loopback and cloud-metadata link-local are **always** blocked |
+| `MANIFOLD_MAX_PAYLOAD_BYTES` | `262144` (256 KB) | Per-topic retained payload cap; larger payloads are truncated for storage/preview |
+| `MANIFOLD_RATE_MAX` / `MANIFOLD_RATE_WINDOW_MS` | `600` / `60000` | General `/api` request rate limit |
+| `MANIFOLD_HISTORIAN_TIMEOUT_MS` | `15000` | Deadline on historian HTTP calls |
+| `CLIENT_URL` | `http://localhost:3000` | Allowed CORS origin (dev client) |
+| `MANIFOLD_DATA_DIR` | `server/data` | Where profiles, history, spill files, and OPC UA PKI live |
+| `MANIFOLD_NO_RESTORE` | `0` | Skip reconnecting saved profiles on startup |
 
 ## MCP server
 
