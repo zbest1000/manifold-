@@ -3,6 +3,7 @@ import { Activity, Cpu, Radio, Workflow, Database, HardDriveDownload, ShieldChec
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import { Card, Button, EmptyState } from '@/components/ui';
+import { Sparkline } from '@/components/charts';
 
 /**
  * System — the tool that watches your namespace, watched. Parses Manifold's own
@@ -84,25 +85,6 @@ function fmtUptime(sec) {
 
 // --- sparkline ---------------------------------------------------------------
 
-function Sparkline({ points, warn }) {
-  const w = 88;
-  const h = 26;
-  if (!points || points.length < 2) return <svg width={w} height={h} className="opacity-40" />;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const span = max - min || 1;
-  const step = w / (points.length - 1);
-  const d = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - ((p - min) / span) * (h - 4) - 2).toFixed(1)}`)
-    .join(' ');
-  const color = warn ? '#fbbf24' : '#38bdf8';
-  return (
-    <svg width={w} height={h} className="shrink-0">
-      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function StatTile({ label, value, unit, history, warn, sub }) {
   return (
     <div className={`rounded-xl border px-3 py-2.5 ${warn ? 'border-amber-500/30 bg-amber-500/[0.06]' : 'border-white/5 bg-white/[0.02]'}`}>
@@ -117,7 +99,9 @@ function StatTile({ label, value, unit, history, warn, sub }) {
           </p>
           {sub && <p className="truncate text-2xs text-slate-500">{sub}</p>}
         </div>
-        <Sparkline points={history} warn={warn} />
+        <div className="w-24 shrink-0">
+          <Sparkline values={history} warn={warn} height={28} />
+        </div>
       </div>
     </div>
   );

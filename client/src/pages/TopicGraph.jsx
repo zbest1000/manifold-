@@ -4,6 +4,7 @@ import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Bo
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
+import { Sparkline, TimeSeriesChart, fmtNum } from '@/components/charts';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 
@@ -812,14 +813,10 @@ function Stat({ icon: Icon, label, value }) {
   );
 }
 
-// Compact numeric sparkline for the detail panel, with an expand-to-popup action.
+// Compact value-history sparkline for the detail panel, with an expand action.
 function PanelPlot({ series, onExpand }) {
   const min = Math.min(...series);
   const max = Math.max(...series);
-  const span = max - min || 1;
-  const w = 320;
-  const h = 70;
-  const pts = series.map((v, i) => `${(i / (series.length - 1)) * w},${h - ((v - min) / span) * h}`).join(' ');
   return (
     <div className="mt-3 rounded-lg border border-white/5 bg-surface-950/50 p-2">
       <div className="mb-1 flex items-center justify-between">
@@ -830,9 +827,9 @@ function PanelPlot({ series, onExpand }) {
           </button>
         )}
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-20 w-full cursor-pointer" preserveAspectRatio="none" onClick={onExpand}>
-        <polyline points={pts} fill="none" stroke="#38bdf8" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      </svg>
+      <div className="cursor-pointer" onClick={onExpand}>
+        <Sparkline values={series} height={72} />
+      </div>
       <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
         <span>min {fmtNum(min)}</span>
         <span>{series.length} pts</span>
@@ -842,16 +839,9 @@ function PanelPlot({ series, onExpand }) {
   );
 }
 
-function fmtNum(n) {
-  if (!Number.isFinite(n)) return '—';
-  const a = Math.abs(n);
-  if (a !== 0 && (a < 0.001 || a >= 1e6)) return n.toExponential(2);
-  return Number(n.toFixed(a < 1 ? 4 : a < 100 ? 2 : 1)).toString();
-}
-
-// Full value-history chart in a popup — a proper time-series with an area fill,
-// an emphasized latest point, a faint grid, and summary stats. Built from the
-// in-memory recent-message ring for the topic; no historian required.
+// Full value-history chart in a popup — the shared Recharts time-series (grid,
+// axes, hover tooltip) plus summary stats. Built from the in-memory
+// recent-message ring for the topic; no historian required.
 function HistoryChartModal({ topic, points, onClose }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -862,23 +852,12 @@ function HistoryChartModal({ topic, points, onClose }) {
   const values = points.map((p) => p.v);
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const span = max - min || 1;
-  const t0 = points[0].ts;
-  const t1 = points[points.length - 1].ts;
-  const tspan = t1 - t0 || 1;
   const avg = values.reduce((s, v) => s + v, 0) / values.length;
-  const W = 720;
-  const H = 260;
-  const padL = 8;
-  const padR = 8;
-  const padY = 16;
-  const x = (ts) => padL + ((ts - t0) / tspan) * (W - padL - padR);
-  const y = (v) => padY + (1 - (v - min) / span) * (H - padY * 2);
-  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.ts).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-  const area = `${line} L${x(t1).toFixed(1)},${(H - padY).toFixed(1)} L${x(t0).toFixed(1)},${(H - padY).toFixed(1)} Z`;
   const last = points[points.length - 1];
+  const tspan = points[points.length - 1].ts - points[0].ts || 1;
   const durS = Math.max(1, Math.round(tspan / 1000));
   const durLabel = durS < 90 ? `${durS}s` : durS < 5400 ? `${Math.round(durS / 60)}m` : `${(durS / 3600).toFixed(1)}h`;
+  const chartSeries = [{ tag: topic, points: points.map((p) => [p.ts, p.v]) }];
 
   const Stat = ({ label, value }) => (
     <div>
@@ -905,25 +884,10 @@ function HistoryChartModal({ topic, points, onClose }) {
           <Stat label="Max" value={fmtNum(max)} />
           <Stat label="Avg" value={fmtNum(avg)} />
         </div>
-        <div className="mt-3 rounded-xl border border-white/5 bg-surface-950/40 p-3">
-          <svg viewBox={`0 0 ${W} ${H}`} className="h-64 w-full" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="histFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.35" />
-                <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            {[0.25, 0.5, 0.75].map((f) => (
-              <line key={f} x1={padL} x2={W - padR} y1={padY + f * (H - padY * 2)} y2={padY + f * (H - padY * 2)} stroke="#ffffff" strokeOpacity="0.05" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            ))}
-            <path d={area} fill="url(#histFill)" />
-            <path d={line} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-            <circle cx={x(last.ts)} cy={y(last.v)} r="3.5" fill="#38bdf8" />
-          </svg>
-          <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
-            <span>{new Date(t0).toLocaleTimeString()}</span>
-            <span>{points.length} points · from the live message ring</span>
-            <span>{new Date(t1).toLocaleTimeString()}</span>
+        <div className="mt-3 rounded-xl border border-white/5 bg-surface-950/40 p-2">
+          <TimeSeriesChart series={chartSeries} height={280} />
+          <div className="mono mt-1 px-1 text-center text-2xs text-slate-500">
+            {points.length} points · from the live message ring
           </div>
         </div>
       </div>
