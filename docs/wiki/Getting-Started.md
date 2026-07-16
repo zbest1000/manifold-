@@ -83,7 +83,7 @@ flowchart LR
 | `MANIFOLD_VIEWER_TOKEN` | Optional read-only token |
 | `MANIFOLD_TOKENS` | Named tokens: `name:token:role,...` (roles `admin`/`viewer`) — see [Operations](Operations) |
 | `MANIFOLD_HOST` | Bind address. Default `127.0.0.1` when open, `0.0.0.0` when a token is set |
-| `MANIFOLD_BLOCK_PRIVATE_TARGETS` | `1` = block the scanner / outbound clients from RFC1918/LAN (hardening; LAN is allowed by default since Discovery needs it — loopback + cloud metadata always blocked) |
+| `MANIFOLD_ALLOW_PRIVATE_TARGETS` | `1` = let the scanner / outbound clients reach RFC1918/LAN (needed for Discovery; fail-closed by default — loopback + cloud metadata always blocked). Safe only on a trusted network |
 | `MANIFOLD_MAX_PAYLOAD_BYTES` | Per-topic retained payload cap (default 256 KB) |
 | `MANIFOLD_DATA_DIR` | Data directory (profiles, history, outbox spill, audit, OPC UA PKI) |
 | `MANIFOLD_NO_RESTORE` | `1` = don't reconnect saved profiles on boot |

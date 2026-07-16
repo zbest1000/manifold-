@@ -64,6 +64,10 @@ services:
       # Bind all interfaces INSIDE the container so the port mapping works; the
       # host-side mapping below (127.0.0.1) is what keeps it off the network.
       MANIFOLD_HOST: "0.0.0.0"
+      # This is a local-only demo (mapped to host loopback), so let Discovery scan
+      # the demo's Docker subnet and reach the bundled broker/OPC UA. The shipped
+      # default is fail-closed — do NOT set this on an internet-exposed instance.
+      MANIFOLD_ALLOW_PRIVATE_TARGETS: "1"
       # This demo runs UNAUTHENTICATED. To expose it beyond this host you MUST
       # set a token AND widen the port mapping below to "5000:5000".
       # MANIFOLD_AUTH_TOKEN: set-a-secret-to-require-auth

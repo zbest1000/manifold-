@@ -18,12 +18,12 @@ const { fetchWithTimeout } = require('./httpTimeout');
  *    169.254.169.254), IPv6 link-local, unspecified, multicast, and reserved /
  *    carrier-grade-NAT space.
  *
- *  - ALLOWED by default, blocked with MANIFOLD_BLOCK_PRIVATE_TARGETS=1 — RFC1918
- *    and IPv6 ULA. This is an OT tool whose entire job is talking to LAN devices:
- *    Discovery scans the plant subnet, and i3X/CESMII/broker-admin endpoints live
- *    on-prem. Blocking those by default breaks the product, so private/LAN is
- *    allowed by default; an internet-exposed instance can opt into blocking it
- *    (and is already fail-closed to loopback unless a token is set).
+ *  - Blocked BY DEFAULT (fail-closed), allowed with MANIFOLD_ALLOW_PRIVATE_TARGETS=1
+ *    — RFC1918 and IPv6 ULA. This is the SSRF-sensitive tier: an internet-exposed
+ *    instance must not become a pivot into a LAN. On-prem/LAN deployments, where
+ *    Discovery scanning the plant subnet and reaching on-prem i3X/CESMII is the
+ *    point, opt in explicitly (the Docker demo sets it, since it is a local-only
+ *    demo). The server logs a loud startup warning whenever this opt-in is on.
  *
  * Hostnames are resolved and every returned address is checked before the
  * connection is made. This stops literal-IP SSRF and hostname-points-inward
@@ -33,10 +33,10 @@ const { fetchWithTimeout } = require('./httpTimeout');
  * residual risk rather than silently implied.
  */
 
-// Private/LAN targets are allowed by default (see above). The legacy
-// MANIFOLD_ALLOW_PRIVATE_TARGETS=1 is still honored as an explicit allow;
-// MANIFOLD_BLOCK_PRIVATE_TARGETS=1 hardens an internet-exposed instance.
-const ALLOW_PRIVATE = process.env.MANIFOLD_BLOCK_PRIVATE_TARGETS === '1' ? false : true;
+// Fail-closed: private/RFC1918/ULA targets are blocked unless the operator
+// explicitly opts in. Loopback, cloud metadata, multicast and reserved ranges
+// are ALWAYS blocked regardless of this flag.
+const ALLOW_PRIVATE = process.env.MANIFOLD_ALLOW_PRIVATE_TARGETS === '1';
 
 function ipv4ToInt(ip) {
   const parts = ip.split('.').map(Number);
@@ -116,7 +116,7 @@ class EgressBlockedError extends Error {
     super(
       `Egress to ${target} blocked: ${reason}.` +
         (reason === 'private/internal address'
-          ? ' RFC1918/LAN targets are blocked because MANIFOLD_BLOCK_PRIVATE_TARGETS=1 is set; unset it to allow them.'
+          ? ' Set MANIFOLD_ALLOW_PRIVATE_TARGETS=1 to allow RFC1918/LAN targets (safe only on a trusted network).'
           : '')
     );
     this.name = 'EgressBlockedError';
