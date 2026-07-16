@@ -1,4 +1,4 @@
-const { fetchWithTimeout } = require('./httpTimeout');
+const { guardedFetch } = require('./egressGuard');
 const { EventEmitter } = require('events');
 
 /**
@@ -68,7 +68,7 @@ class CesmiiClient extends EventEmitter {
     if (!this.isConfigured()) throw new Error('CESMII client is not configured');
     let res;
     try {
-      res = await fetchWithTimeout(this.config.endpoint, {
+      res = await guardedFetch(this.config.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(body)

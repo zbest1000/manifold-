@@ -1,5 +1,5 @@
 const { EventEmitter } = require('events');
-const { fetchWithTimeout } = require('./httpTimeout');
+const { guardedFetch } = require('./egressGuard');
 
 /**
  * Client for a CESMII i3X server — the "Common Contextual Manufacturing
@@ -58,7 +58,7 @@ class I3xClient extends EventEmitter {
     if (!root) throw new Error('i3X client is not configured');
     let res;
     try {
-      res = await fetchWithTimeout(`${root}${path}`, {
+      res = await guardedFetch(`${root}${path}`, {
         method,
         headers: this.headers(),
         body: body ? JSON.stringify(body) : undefined

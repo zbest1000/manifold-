@@ -1,9 +1,11 @@
-const { fetchWithTimeout } = require('./httpTimeout');
+'use strict';
+
+const { guardedFetch } = require('./egressGuard');
 
 // Admin APIs get a hard per-request deadline so a wedged broker admin
-// endpoint can't hang the Flows view indefinitely.
-const defaultFetch = (url, opts) => fetchWithTimeout(url, opts, 10_000);
-'use strict';
+// endpoint can't hang the Flows view indefinitely, and go through the egress
+// guard so a user-supplied admin URL can't be aimed at internal/metadata hosts.
+const defaultFetch = (url, opts) => guardedFetch(url, opts, 10_000);
 
 /**
  * Broker admin integration — the only honest source for "who subscribes to what".
