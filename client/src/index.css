@@ -16,8 +16,11 @@ body,
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  /* System font stack — no external CDN so the UI renders identically on
+     air-gapped / on-prem plant networks that have no outbound internet. */
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 /* Thin scrollbars for panels */
@@ -49,7 +52,7 @@ body {
 }
 
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
 }
 
 /* Value-change flash for the topic tree (remounted via key to replay). */

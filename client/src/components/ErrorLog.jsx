@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ScrollText, X, Trash2, Inbox, Filter } from 'lucide-react';
 import clsx from 'clsx';
 import { useStore } from '@/store/store';
+import { Tooltip } from './ui';
 
 const LEVELS = ['error', 'warning', 'info', 'verbose'];
 const LEVEL_STYLE = {
@@ -31,7 +32,7 @@ function Empty({ title, hint }) {
 
 /** Persistent, leveled, filterable log. Opened from the sidebar or from a
  *  broker's error count (scoped to that broker). Open state lives in the store. */
-export default function ErrorLog() {
+export default function ErrorLog({ collapsed = false }) {
   const logs = useStore((s) => s.logs);
   const unseen = useStore((s) => s.unseen);
   const logFilters = useStore((s) => s.logFilters);
@@ -54,31 +55,49 @@ export default function ErrorLog() {
     ? brokers.find((b) => b.id === logBrokerFilter)?.name || logBrokerFilter
     : null;
 
+  const badge = unseen > 0 ? unseen : logs.length;
+
   return (
     <>
-      <button
-        onClick={() => openLog()}
-        title="View the event log (errors, warnings, info, verbose)"
-        className={clsx(
-          'flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 transition',
-          unseen > 0
-            ? 'border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/15'
-            : 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/5'
-        )}
-      >
-        <span className="flex items-center gap-2">
-          <ScrollText size={14} />
-          Logs
-        </span>
-        <span
+      {collapsed ? (
+        <Tooltip label={unseen > 0 ? `Log — ${unseen} new` : 'Event log'} side="right">
+          <button
+            onClick={() => openLog()}
+            aria-label="View the event log"
+            className={clsx(
+              'relative grid h-8 w-8 place-items-center rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60',
+              unseen > 0 ? 'bg-rose-500/15 text-rose-300' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+            )}
+          >
+            <ScrollText size={16} />
+            {unseen > 0 && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-surface-900" />}
+          </button>
+        </Tooltip>
+      ) : (
+        <button
+          onClick={() => openLog()}
+          aria-label="View the event log (errors, warnings, info, verbose)"
           className={clsx(
-            'mono rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
-            unseen > 0 ? 'bg-rose-500 text-white' : 'bg-white/10 text-slate-400'
+            'flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60',
+            unseen > 0
+              ? 'border-rose-500/40 bg-rose-500/10 text-rose-200 hover:bg-rose-500/15'
+              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/5'
           )}
         >
-          {unseen > 0 ? unseen : logs.length}
-        </span>
-      </button>
+          <span className="flex items-center gap-2 text-sm">
+            <ScrollText size={14} />
+            Logs
+          </span>
+          <span
+            className={clsx(
+              'mono rounded-full px-1.5 py-0.5 text-2xs font-semibold',
+              unseen > 0 ? 'bg-rose-500 text-white' : 'bg-white/10 text-slate-400'
+            )}
+          >
+            {badge}
+          </span>
+        </button>
+      )}
 
       <AnimatePresence>
         {logOpen && (

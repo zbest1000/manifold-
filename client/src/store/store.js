@@ -113,6 +113,15 @@ export const useStore = create((set, get) => ({
   showValues: localStorage.getItem('tc.showValues') !== 'false',
   showMinimap: localStorage.getItem('tc.showMinimap') === 'true',
 
+  // Sidebar collapse (icon-only rail), persisted.
+  navCollapsed: localStorage.getItem('tc.navCollapsed') === 'true',
+  toggleNav: () =>
+    set((s) => {
+      const navCollapsed = !s.navCollapsed;
+      localStorage.setItem('tc.navCollapsed', String(navCollapsed));
+      return { navCollapsed };
+    }),
+
   // Cross-view coverage paint: set by the Flows view ("show on topic map"),
   // consumed by the Topics graph as matchIds. Session-only, not persisted.
   coverage: null, // { brokerId, matchIds: Set, label }

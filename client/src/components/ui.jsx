@@ -1,6 +1,71 @@
+import { useId, useState } from 'react';
 import clsx from 'clsx';
 
 /** Small reusable presentational primitives shared across pages. */
+
+/**
+ * Tooltip — a styled, keyboard-and-touch-aware replacement for the native
+ * `title=` attribute (which has a ~1.5s delay, is unstyled, and never shows on
+ * touch or focus). Wrap any control; the label appears on hover and focus.
+ * `side` positions it; default 'top'. Purely CSS-positioned, no portal.
+ */
+export function Tooltip({ label, side = 'top', className, children }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  if (!label) return children;
+  const pos = {
+    top: 'bottom-full left-1/2 -translate-x-1/2 mb-1.5',
+    bottom: 'top-full left-1/2 -translate-x-1/2 mt-1.5',
+    right: 'left-full top-1/2 -translate-y-1/2 ml-1.5',
+    left: 'right-full top-1/2 -translate-y-1/2 mr-1.5'
+  };
+  return (
+    <span
+      className={clsx('relative inline-flex', className)}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocusCapture={() => setOpen(true)}
+      onBlurCapture={() => setOpen(false)}
+    >
+      {children}
+      <span
+        role="tooltip"
+        id={id}
+        className={clsx(
+          'pointer-events-none absolute z-[100] whitespace-nowrap rounded-md border border-white/10 bg-surface-800 px-2 py-1 text-2xs font-medium text-slate-100 shadow-xl transition-opacity duration-100',
+          pos[side],
+          open ? 'opacity-100' : 'opacity-0'
+        )}
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * IconButton — a square icon control that is ALWAYS labelled: the `label` drives
+ * both the tooltip and aria-label, so no icon-only affordance is ever a mystery
+ * (and it stays labelled when the nav collapses to icons).
+ */
+export function IconButton({ icon: Icon, label, side = 'top', size = 16, active = false, className, ...rest }) {
+  return (
+    <Tooltip label={label} side={side}>
+      <button
+        type="button"
+        aria-label={label}
+        className={clsx(
+          'inline-grid h-8 w-8 place-items-center rounded-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 disabled:opacity-40 disabled:cursor-not-allowed',
+          active ? 'bg-accent-500/15 text-accent-300 ring-1 ring-inset ring-accent-500/25' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200',
+          className
+        )}
+        {...rest}
+      >
+        <Icon size={size} />
+      </button>
+    </Tooltip>
+  );
+}
 
 export function Card({ className, children, ...rest }) {
   return (

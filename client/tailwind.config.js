@@ -21,8 +21,20 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace']
+        sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        mono: ['ui-monospace', 'SF Mono', 'JetBrains Mono', 'Menlo', 'Consolas', 'monospace']
+      },
+      // A deliberate type scale with matching line-heights, so UI text stops
+      // hand-picking arbitrary [10px]/[11px] sizes. Minimum readable step is 12px.
+      fontSize: {
+        '2xs': ['0.6875rem', { lineHeight: '1rem' }], // 11px — dense labels only
+        xs: ['0.75rem', { lineHeight: '1.1rem' }], // 12px
+        sm: ['0.8125rem', { lineHeight: '1.25rem' }], // 13px — default UI body
+        base: ['0.9375rem', { lineHeight: '1.5rem' }], // 15px
+        lg: ['1.0625rem', { lineHeight: '1.6rem' }], // 17px
+        xl: ['1.25rem', { lineHeight: '1.75rem' }], // 20px — page titles
+        '2xl': ['1.5rem', { lineHeight: '2rem' }],
+        '3xl': ['1.875rem', { lineHeight: '2.25rem' }]
       }
     }
   },
