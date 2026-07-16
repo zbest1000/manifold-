@@ -83,7 +83,7 @@ export default function Tags() {
                 <Upload size={14} className="mr-1" /> Import CSV
               </Button>
             )}
-            <Button onClick={() => setWizardOpen(true)} disabled={selection.size === 0 && source?.type !== 'sparkplug'}>
+            <Button onClick={() => setWizardOpen(true)} disabled={selection.size === 0}>
               <Plus size={14} className="mr-1" /> Add to UNS {selection.size > 0 && `(${selection.size})`}
             </Button>
           </div>
@@ -420,6 +420,11 @@ function BindWizard({ source, selection, brokers, editing = null, onClose, onDon
           ],
           target: { type: 'mqtt', brokerId: form.brokerId, retain: form.retain, qos: Number(form.qos) || 0 }
         });
+        // MQTT tags compile to a pipeline Route, not a Binding — say so, so it
+        // isn't a mystery when it doesn't appear under Tags.
+        toast.success('Created a pipeline route (see Pipelines → Routes)');
+        onDone();
+        return;
       } else {
         const body = {
           name: name || null,
@@ -519,8 +524,8 @@ function sparkplugSourceFromSelection(brokerId, selection) {
   // "group/edge/device/metric" — reconstruct one (group, edge, device) scope
   // and the metric list from the first selection's path.
   const entries = [...selection.entries()];
-  const first = entries[0];
-  const meta = first[1].meta || {};
+  if (entries.length === 0) throw new Error('Select at least one Sparkplug metric first');
+  const meta = entries[0][1].meta || {};
   // The browse API returns metric nodes with address = metric name and
   // meta.device set; the tree id carried the scope, so we ask the user's
   // selection context: all metrics share the source node's scope.
