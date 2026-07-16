@@ -6,6 +6,8 @@
 
 Industrial data explorer and DataOps toolkit: MQTT, Sparkplug B, OPC UA, CESMII SMIP, and i3X, with a live Unified Namespace view.
 
+**[Website](https://zbest1000.github.io/manifold/)** · **[Docs / Wiki](../../wiki)** · **[Architecture](ARCHITECTURE.md)** · **[Changelog](CHANGELOG.md)**
+
 <p align="center">
   <img src="docs/wiki/images/uns-topology.png" alt="Live UNS topology" width="850">
 </p>
@@ -32,7 +34,7 @@ Manifold connects to brokers and servers, streams their data in real time, and r
 - Pipelines: filter → transform chain (repath, pick/rename/set, scale, numeric, Sparkplug flatten, TVQ envelope) → broker or historian, with a dry-run preview against live topics and two-layer loop protection.
 - Models: merge fields from many topics into one object at a clean UNS path.
 - Historians: InfluxDB v2, TimescaleDB/PostgreSQL, and Timebase (Flow Software) — all through a store-and-forward outbox with disk spill and configurable drop policy.
-- Trends: read stored series back out of InfluxDB and TimescaleDB — up to 10 tags per chart, downsampled server-side, auto-refreshing.
+- Trends: chart stored series from InfluxDB and TimescaleDB — or a local file **recording**, with no external database — up to 10 tags per chart, downsampled server-side, auto-refreshing.
 - Recorder and replay, schema contracts with drift detection, alert rules with webhooks — silence/new-topic rules plus value thresholds with sustain and hysteresis, evaluated at message latency.
 - Everything edits in place: brokers, OPC UA connections, pipelines, historians, models, bindings, and alert rules update without delete/re-add.
 
@@ -42,7 +44,9 @@ Manifold connects to brokers and servers, streams their data in real time, and r
 - Optional Sparkplug primary-host session: Manifold publishes retained `STATE` so edge nodes see a host application.
 
 **Operations**
-- Token auth with admin and read-only roles (including named, individually revocable tokens), auth-failure rate limiting, audit log, Prometheus `/metrics`, config export/import with secrets stripped.
+- Token auth with admin and read-only roles (including named, individually revocable tokens), enforced identically on the REST API and the Socket.IO handshake, with per-IP auth-failure rate limiting on both. Audit log, config export/import with secrets stripped.
+- Fail-closed by default: with no token the server binds `127.0.0.1` only. An egress guard blocks the network scanner and outbound HTTP clients from reaching loopback, cloud-metadata, and (unless opted in) private ranges. Security headers (`helmet`) and a general request rate limit are on by default.
+- Self-observability: a **System (Health)** page renders Manifold's own Prometheus `/metrics` live — process health, per-broker ingest, and every engine counter, each with a rolling sparkline.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works: system design, the message hot path, the API surface, protocol notes, and testing. Operational guides (broker ACLs, historian setup, transform reference, troubleshooting) live in the [wiki](../../wiki), generated from [`docs/wiki/`](docs/wiki). Release history is in [CHANGELOG.md](CHANGELOG.md); release steps and verification status are in [docs/RELEASING.md](docs/RELEASING.md).
 

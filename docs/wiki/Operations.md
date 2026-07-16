@@ -13,6 +13,13 @@ module:
 
 > *Pipelines, historians, tag bindings, and alerts — live, each card linking to its module.*
 
+For deeper self-observability, **System → Health** renders Manifold's own
+Prometheus `/metrics` in the browser: process uptime, memory, and event-loop
+delay; per-broker message rate and topic counts; and every engine counter
+(pipelines, outbox, contracts, alerts, bindings, recorder) — each with a rolling
+sparkline, and thresholds (event-loop delay, dropped/spilled points, errors)
+flagged amber.
+
 ## Authentication and roles
 
 Manifold can publish to brokers, actuate equipment through Sparkplug
@@ -29,8 +36,25 @@ npm start
 | 🔑 Admin | `MANIFOLD_AUTH_TOKEN` | everything — API, socket, mutations |
 | 👁️ Viewer | `MANIFOLD_VIEWER_TOKEN` | read everything; every mutation refused with 403 |
 
-`/health` stays open for liveness probes. Without tokens the server runs open
-and warns loudly at startup.
+Auth is enforced identically on the REST API **and** the Socket.IO handshake —
+the socket can publish and actuate, so it is gated the same way. Viewers see a
+persistent *read-only* badge in the UI and mutation controls are disabled, so a
+read-only session is never a wall of silent 403s. `/health` and `/metrics` stay
+open for probes and scrapers.
+
+### Fail closed by default
+
+With **no token set**, the server binds `127.0.0.1` only and warns at startup —
+an accidentally-unauthenticated instance is reachable from its own host, never
+the network. Exposing an open instance off-host is a deliberate act:
+
+```bash
+MANIFOLD_HOST=0.0.0.0 npm start   # UNAUTHENTICATED and on the network — you were warned
+```
+
+The Docker demo already does this safely: it binds `0.0.0.0` inside the
+container but maps only to host loopback (`127.0.0.1:5000:5000`), so `docker
+compose up` is reachable at `localhost` and nowhere else until you set a token.
 
 ### Named tokens
 
@@ -44,11 +68,25 @@ MANIFOLD_TOKENS="alice:$(openssl rand -hex 24):admin,dashboard:$(openssl rand -h
 Format: `name:token:role,...` with role `admin` or `viewer`. Revoking one
 person's access means removing one entry — no shared-secret rotation.
 
-### Brute-force protection
+### Brute-force protection and rate limiting
 
-Failed authentication is rate-limited per IP: after **20 failures in a
-minute**, further attempts get `429` until the window passes. Successful
-requests are unaffected.
+Failed authentication is rate-limited per IP — on **both** the REST API and the
+socket handshake — after **20 failures in a minute**, further attempts get `429`
+until the window passes. Successful requests are unaffected. A separate general
+limiter caps overall `/api` traffic (default 600 requests/minute per IP;
+`MANIFOLD_RATE_MAX` / `MANIFOLD_RATE_WINDOW_MS`), and `helmet` sets standard
+security headers on every response.
+
+### Network safety (egress guard)
+
+The two features that reach out to other machines — the CIDR network scanner and
+the outbound HTTP clients (i3X, CESMII, broker admin APIs) — pass every target
+through one egress guard. Loopback, link-local (including the cloud-metadata
+address `169.254.169.254`), multicast, and reserved ranges are **always**
+blocked, so Manifold can't be turned into an SSRF pivot or an internal port
+scanner. RFC1918 / LAN targets — the normal case on a plant network — require
+`MANIFOLD_ALLOW_PRIVATE_TARGETS=1`, an explicit opt-in you set on a trusted
+network.
 
 ### CORS
 
@@ -75,8 +113,10 @@ scrape_configs:
       - targets: ['manifold-host:5000']
 ```
 
-> 💡 The web UI never polls for these numbers — they're pushed over the
-> existing socket every 2 s, and only while a client is connected.
+> 💡 The Overview cards never poll — engine numbers are pushed over the existing
+> socket every 2 s, only while a client is connected. The **System → Health**
+> page reads the same `/metrics` endpoint directly for the full set (process and
+> per-broker readings the socket stream doesn't carry).
 
 ## Configuration as code
 
