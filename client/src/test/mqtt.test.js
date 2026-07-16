@@ -14,6 +14,12 @@ describe('topicMatches', () => {
     expect(topicMatches('a/#', 'ab')).toBe(false);
   });
 
+  it('treats a bare # as match-everything (the most common subscription)', () => {
+    expect(topicMatches('#', 'plant/line1/temp')).toBe(true);
+    expect(topicMatches('#', 'a')).toBe(true);
+    expect(topicMatches('#', 'spBv1.0/g/NDATA/e/d')).toBe(true);
+  });
+
   it('falls back to case-insensitive substring for plain queries', () => {
     expect(topicMatches('TEMP', 'factory/line1/temperature')).toBe(true);
     expect(topicMatches('pressure', 'factory/line1/temperature')).toBe(false);
