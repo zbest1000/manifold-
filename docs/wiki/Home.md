@@ -19,7 +19,7 @@
 | 🗄️ | **[Historians](Historians)** | InfluxDB, TimescaleDB, Timebase — store-and-forward in, Trends charts back out |
 | 🔀 | **[Pipelines and Models](Pipelines-and-Models)** | Route, reshape, and contextualize the live stream |
 | 🏷️ | **[Tags and Sparkplug](Tags-and-Sparkplug)** | Browse device tags, publish them into the UNS, run a Sparkplug primary host |
-| 🛡️ | **[Operations](Operations)** | Auth and named tokens, audit, Prometheus, config as code, alerts |
+| 🛡️ | **[Operations](Operations)** | Fail-closed auth and named tokens, the egress guard, audit, the System health page, config as code, alerts |
 | 🩺 | **[Troubleshooting](Troubleshooting)** | Symptom → cause → fix |
 
 ## 📐 How it fits together

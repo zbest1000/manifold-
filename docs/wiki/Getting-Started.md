@@ -69,12 +69,22 @@ flowchart LR
 
 ## Environment variables
 
+> ⚠️ **Loopback by default.** With **no** `MANIFOLD_AUTH_TOKEN` set, the server
+> binds `127.0.0.1` only — it is reachable from its own host, not the network.
+> This is deliberate: an unauthenticated control plane should never be exposed
+> by accident. To reach it from other machines, either set a token (recommended)
+> or set `MANIFOLD_HOST=0.0.0.0`. See [Operations](Operations) for the full
+> hardening story.
+
 | Variable | Purpose |
 |---|---|
 | `PORT` | HTTP/socket port (default 5000) |
 | `MANIFOLD_AUTH_TOKEN` | Admin bearer token; enables auth on API + socket |
 | `MANIFOLD_VIEWER_TOKEN` | Optional read-only token |
 | `MANIFOLD_TOKENS` | Named tokens: `name:token:role,...` (roles `admin`/`viewer`) — see [Operations](Operations) |
+| `MANIFOLD_HOST` | Bind address. Default `127.0.0.1` when open, `0.0.0.0` when a token is set |
+| `MANIFOLD_ALLOW_PRIVATE_TARGETS` | `1` = let the scanner / outbound clients reach RFC1918/LAN targets (loopback + cloud metadata stay blocked) |
+| `MANIFOLD_MAX_PAYLOAD_BYTES` | Per-topic retained payload cap (default 256 KB) |
 | `MANIFOLD_DATA_DIR` | Data directory (profiles, history, outbox spill, audit, OPC UA PKI) |
 | `MANIFOLD_NO_RESTORE` | `1` = don't reconnect saved profiles on boot |
 | `CLIENT_URL` | Allowed CORS origin (default `http://localhost:3000`) |

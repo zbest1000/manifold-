@@ -5,6 +5,47 @@ All notable changes to Manifold are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **System (Health) page.** Renders Manifold's own Prometheus `/metrics` in the
+  browser — process health (uptime, memory, event-loop delay), per-broker
+  ingest rate and topic counts, and every engine counter — each with a rolling
+  sparkline and amber thresholds.
+- **Trends from local recordings.** The Trends page can chart a file recording
+  directly (server-side downsampling), with no external historian required.
+- **Egress guard.** One chokepoint for the network scanner and the outbound
+  HTTP clients (i3X, CESMII, broker admin): loopback, cloud-metadata
+  link-local, multicast, and reserved ranges are always blocked; RFC1918/LAN
+  targets require `MANIFOLD_ALLOW_PRIVATE_TARGETS=1`.
+- **Security headers and a general rate limit** (`helmet` + `express-rate-limit`)
+  on the API, plus `GET /api/whoami` so the UI can show a read-only badge.
+
+### Changed
+
+- **Fail closed by default.** With no auth token, the server now binds
+  `127.0.0.1` only; exposing an unauthenticated instance off-host requires
+  `MANIFOLD_HOST=0.0.0.0`. The Docker demo maps to host loopback only.
+- Socket.IO auth now shares the REST brute-force throttle and audit trail (both
+  entry points enforce auth and rate-limit failures identically).
+- Per-topic MQTT payloads are capped (`MANIFOLD_MAX_PAYLOAD_BYTES`, default
+  256 KB); the live socket stream is backpressure-safe; historian HTTP calls
+  have a hard timeout; Postgres/Timescale TLS verifies certificates by default.
+- The built client is served whenever `client/dist` exists (no longer gated on
+  `NODE_ENV=production`).
+
+### Fixed
+
+- Wildcard value-threshold alerts keep independent state per concrete topic
+  (a normal reading on one topic no longer suppresses a real breach on another).
+- Sparkplug alias-only DATA metrics resolve to their BIRTH names instead of
+  collapsing into an empty-name key; the registry is bounded against untrusted
+  traffic.
+- A bare `#` topic filter now matches every topic in the UI (Consumer coverage).
+- The graph auto-fits to the viewport on first load; canvas interaction no
+  longer captures stale callbacks after switching servers or styles.
+
 ## [1.0.0] - 2026-07-15
 
 First tagged release.
