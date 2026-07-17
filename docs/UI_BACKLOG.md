@@ -46,6 +46,14 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] The graph tree layout fanned out into a wide, flat horizontal line at the
+  leaves. Rewrote it as an indented tree that grows top-to-bottom (one row per
+  node, depth = indent, file-explorer style) with a tree-aware fit (width-driven,
+  top-anchored). Reverted the earlier auto-collapse — all nodes expand by
+  default. Added collapse/expand level controls (collapse to top, expand to
+  2/3/4, expand all) to the shared toolbar; collapse/expand re-frames the view.
+  Applied to i3X too (collapse state + controls + top-to-bottom tree, matching
+  Topics). Verified live on both pages.
 - [x] The replay scrubber (Topics) couldn't be scrubbed: the bar was display
   only, duration was hardcoded, no speed/time readout, no keyboard path. Rebuilt
   it as a real seek control (click/drag, arrow-key nudge, Home/End, 0.5x/1x/2x

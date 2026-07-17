@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search, Box, Maximize2, PanelRight } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 import ForceGraph3D from '@/graph/ForceGraph3D';
-import { buildI3xGraph } from '@/graph/buildGraph';
+import { buildI3xGraph, collapseGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphLegend from '@/components/GraphLegend';
 import Graph3DControls from '@/components/Graph3DControls';
@@ -64,11 +64,65 @@ export default function I3x() {
   }, [connected]);
 
   const server = useMemo(() => ({ baseUrl: status?.baseUrl, info: status?.info }), [status]);
-  const graph = useMemo(() => {
+  const fullGraph = useMemo(() => {
     if (!connected) return { nodes: [], links: [] };
     return buildI3xGraph(server, objects);
   }, [connected, server, objects]);
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const collapseKey = [...collapsed].sort().join('|');
+  const graph = useMemo(() => collapseGraph(fullGraph, collapsed), [fullGraph, collapseKey]);
   const groupsPresent = useMemo(() => new Set(graph.nodes.map((n) => n.group)), [graph]);
+
+  const toggleCollapse = useCallback((node) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(node.id)) next.delete(node.id);
+      else next.add(node.id);
+      return next;
+    });
+  }, []);
+
+  const refitSoon = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => graphRef.current?.fitTo()));
+  }, []);
+
+  // Collapse everything below `level` (Infinity = expand all), like Topics.
+  const expandToLevel = useCallback(
+    (level) => {
+      if (!Number.isFinite(level)) {
+        setCollapsed(new Set());
+        refitSoon();
+        return;
+      }
+      const childrenOf = new Map();
+      const incoming = new Set();
+      for (const l of fullGraph.links) {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        if (!childrenOf.has(s)) childrenOf.set(s, []);
+        childrenOf.get(s).push(t);
+        incoming.add(t);
+      }
+      const depth = new Map();
+      const queue = fullGraph.nodes.filter((n) => !incoming.has(n.id)).map((n) => (depth.set(n.id, 0), [n.id, 0]));
+      while (queue.length) {
+        const [id, d] = queue.shift();
+        for (const c of childrenOf.get(id) || []) {
+          if (!depth.has(c)) {
+            depth.set(c, d + 1);
+            queue.push([c, d + 1]);
+          }
+        }
+      }
+      const next = new Set();
+      for (const n of fullGraph.nodes) {
+        if ((depth.get(n.id) ?? 0) >= level && childrenOf.get(n.id)?.length) next.add(n.id);
+      }
+      setCollapsed(next);
+      refitSoon();
+    },
+    [fullGraph, refitSoon]
+  );
 
   const connect = async () => {
     setBusy(true);
@@ -245,6 +299,7 @@ export default function I3x() {
                   onBeautify={() => setGraphLayout(graphLayout === 'radial' ? 'tree' : 'radial')}
                   onProperties={() => setPanelOpen(true)}
                   hasSelection={selected?.kind === 'i3x-object'}
+                  onExpandLevel={expandToLevel}
                 />
                 <ForceGraph
                   ref={graphRef}
@@ -253,6 +308,7 @@ export default function I3x() {
                   layoutId={graphLayout}
                   selectedId={selected?.id || null}
                   onSelect={selectNode}
+                  onExpand={toggleCollapse}
                   matchIds={matchIds}
                   minimap={showMinimap}
                 />
