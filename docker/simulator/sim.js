@@ -63,9 +63,14 @@ const MACHINES = Object.keys(MACHINE_SENSORS);
 // `every` (>1) publishes on a subset of ticks so the namespace shows a mix of
 // fast and slow (occasionally "overdue") branches, like a real plant.
 // ---------------------------------------------------------------------------
+// Optional site prefix so multiple broker instances carry distinct namespaces
+// (e.g. SITE=north -> north/factory/...). Blank = the default flat namespace.
+const SITE = (process.env.SITE || '').replace(/[^a-zA-Z0-9_-]/g, '');
+
 function buildTopics() {
   const topics = [];
-  const add = (topic, sensor, every = 1) => topics.push({ topic, gen: SENSORS[sensor], s: {}, every });
+  const add = (topic, sensor, every = 1) =>
+    topics.push({ topic: SITE ? `${SITE}/${topic}` : topic, gen: SENSORS[sensor], s: {}, every });
 
   // Factories: plant-a/-b/-c → lines → machines → sensors
   const plants = ['plant-a', 'plant-b', 'plant-c'];
