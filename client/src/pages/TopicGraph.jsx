@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, ChevronDown, ChevronUp, Sparkles, RotateCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -80,6 +80,11 @@ export default function TopicGraph() {
   const [labelDensity, setLabelDensity] = useState(0.5); // 0 (off) .. 1 (dense)
   const [forcePositions, setForcePositions] = useState(null); // worker-computed force coords for show-all
   const [forceBusy, setForceBusy] = useState(false);
+  // 3D look-and-feel controls (local — only the style is shared with the 2D views).
+  const [nodeScale3d, setNodeScale3d] = useState(1);
+  const [linkOpacity3d, setLinkOpacity3d] = useState(0.35);
+  const [autoRotate3d, setAutoRotate3d] = useState(false);
+  const [beautify3d, setBeautify3d] = useState(false);
   const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
@@ -368,9 +373,19 @@ export default function TopicGraph() {
         ) : view === '3d' ? (
           <div className="relative flex-1">
             <Suspense fallback={<RendererLoading />}>
-              <ForceGraph3D ref={graph3dRef} data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={setSelected} />
+              <ForceGraph3D
+                ref={graph3dRef}
+                data={graph}
+                styleId={graphStyle}
+                selectedId={selected?.id || null}
+                onSelect={setSelected}
+                nodeScale={nodeScale3d}
+                linkOpacity={linkOpacity3d}
+                autoRotate={autoRotate3d}
+                beautify={beautify3d}
+              />
             </Suspense>
-            <div className="absolute right-4 top-4 z-10">
+            <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
               <button
                 onClick={() => graph3dRef.current?.resetView()}
                 title="Reset the camera to the default angle and zoom"
@@ -380,6 +395,16 @@ export default function TopicGraph() {
                 <span className="hidden font-medium sm:inline">Reset view</span>
               </button>
             </div>
+            <Graph3DControls
+              beautify={beautify3d}
+              onBeautify={() => setBeautify3d((v) => !v)}
+              autoRotate={autoRotate3d}
+              onAutoRotate={() => setAutoRotate3d((v) => !v)}
+              nodeScale={nodeScale3d}
+              onNodeScale={setNodeScale3d}
+              linkOpacity={linkOpacity3d}
+              onLinkOpacity={setLinkOpacity3d}
+            />
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate. Scroll to zoom. Click a node for details. The style dropdown up top restyles this view too.
             </div>
@@ -587,6 +612,59 @@ function GraphLegend({ styleId, groups }) {
               {GROUP_LABELS[g] || g}
             </span>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Look-and-feel controls for the 3D view (Beautify + auto-rotate + size/link sliders).
+function Graph3DControls({ beautify, onBeautify, autoRotate, onAutoRotate, nodeScale, onNodeScale, linkOpacity, onLinkOpacity }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="absolute left-4 top-4 z-10 w-52 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-slate-300 backdrop-blur">
+      <div className="flex items-stretch">
+        <button
+          onClick={onBeautify}
+          title="Depth-graded colours, glowing links, and a slow spin"
+          className={clsx(
+            'flex flex-1 items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
+            beautify ? 'bg-accent-500/20 text-accent-200' : 'text-slate-300 hover:text-slate-100'
+          )}
+        >
+          <Sparkles size={15} className={beautify ? 'text-accent-300' : ''} /> Beautify
+        </button>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          title="Look and feel"
+          className="border-l border-white/10 px-2.5 text-slate-400 transition hover:text-slate-200"
+        >
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
+      {open && (
+        <div className="space-y-3 border-t border-white/5 px-3 py-3">
+          <button
+            onClick={onAutoRotate}
+            className={clsx(
+              'flex w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
+              autoRotate ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
+            )}
+          >
+            <RotateCw size={13} className={autoRotate ? 'text-accent-300' : ''} /> Auto-rotate
+          </button>
+          <label className="block">
+            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
+              Node size <span className="tabular-nums text-slate-500">{nodeScale.toFixed(1)}×</span>
+            </span>
+            <input type="range" min="0.5" max="2" step="0.1" value={nodeScale} onChange={(e) => onNodeScale(Number(e.target.value))} className="w-full accent-accent-500" />
+          </label>
+          <label className="block">
+            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
+              Links <span className="tabular-nums text-slate-500">{Math.round(linkOpacity * 100)}%</span>
+            </span>
+            <input type="range" min="0.05" max="0.8" step="0.05" value={linkOpacity} onChange={(e) => onLinkOpacity(Number(e.target.value))} className="w-full accent-accent-500" />
+          </label>
         </div>
       )}
     </div>

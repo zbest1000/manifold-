@@ -17,6 +17,7 @@ const MAX_3D_NODES = 50000; // GPU instancing keeps this smooth
 const LABEL_COUNT = 40; // sprite labels for the highest-degree nodes only
 const LINK_OPACITY = 0.35;
 const IDLE_MS = 2000; // keep the rAF loop alive this long after interaction
+const AUTO_ROTATE_SPEED = 0.0022; // rad/frame — a slow, cinematic spin
 
 /** Strip the alpha channel from an rgba() color (link opacity is constant here). */
 function opaqueColor(color) {
@@ -81,7 +82,17 @@ function disposeObject(obj) {
 }
 
 const ForceGraph3D = forwardRef(function ForceGraph3D(
-  { data, styleId = 'constellation', selectedId = null, onSelect, colorByProtocol = false },
+  {
+    data,
+    styleId = 'constellation',
+    selectedId = null,
+    onSelect,
+    colorByProtocol = false,
+    nodeScale = 1, // 0.5–2  point-size multiplier
+    linkOpacity = LINK_OPACITY, // 0–0.8  link line opacity
+    autoRotate = false, // gentle continuous spin
+    beautify = false // depth-graded colours + glow + auto-rotate
+  },
   ref
 ) {
   const canvasRef = useRef(null);
@@ -93,6 +104,8 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
   const rotRef = useRef({ yaw: 0.6, pitch: -0.35 });
   const zoomRef = useRef(1);
   const selSpriteRef = useRef(null);
+  const autoRotateRef = useRef(false); // read by the render loop each frame
+  const nodeScaleRef = useRef(nodeScale); // keeps the selection ring hugging scaled nodes
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
@@ -135,8 +148,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     };
     const loop = () => {
       raf = 0;
+      if (autoRotateRef.current) rotRef.current.yaw += AUTO_ROTATE_SPEED;
       renderFrame();
-      if (performance.now() - lastActive < IDLE_MS && !document.hidden) raf = requestAnimationFrame(loop);
+      const interacting = performance.now() - lastActive < IDLE_MS;
+      if ((interacting || autoRotateRef.current) && !document.hidden) raf = requestAnimationFrame(loop);
     };
     const requestRender = (sustain = false) => {
       if (sustain) lastActive = performance.now();
@@ -280,7 +295,7 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const nodes = data.nodes.slice(0, MAX_3D_NODES).map((n) => ({ ...n }));
     const keep = new Set(nodes.map((n) => n.id));
     const links = data.links.filter((l) => keep.has(l.source) && keep.has(l.target)).map((l) => ({ ...l }));
-    sphericalTreeLayout(nodes, links);
+    const maxDepth = sphericalTreeLayout(nodes, links);
     nodesRef.current = nodes;
     const byId = new Map(nodes.map((n) => [n.id, n]));
     byIdRef.current = byId;
@@ -310,7 +325,8 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       positions[i * 3 + 2] = n.z;
       radii[i] = r;
       pos.set(n.x, n.y, n.z);
-      scl.set(r, r, r);
+      const s = r * nodeScaleRef.current;
+      scl.set(s, s, s);
       nodeMesh.setMatrixAt(i, m4.compose(pos, quat, scl));
       nodeMesh.setColorAt(i, col.set(colorFor(n)));
     }
@@ -318,7 +334,8 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
     group.add(nodeMesh);
 
-    // Links: a single LineSegments buffer with constant opacity.
+    // Links: a single LineSegments buffer whose opacity/blending the look effects tune.
+    let lineMat = null;
     if (links.length > 0) {
       const linePos = new Float32Array(links.length * 6);
       let j = 0;
@@ -334,10 +351,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       }
       const lineGeo = new THREE.BufferGeometry();
       lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
-      const lineMat = new THREE.LineBasicMaterial({
+      lineMat = new THREE.LineBasicMaterial({
         color: new THREE.Color(opaqueColor(style.link.color)),
         transparent: true,
-        opacity: LINK_OPACITY,
+        opacity: linkOpacity,
         depthWrite: false
       });
       group.add(new THREE.LineSegments(lineGeo, lineMat));
@@ -365,7 +382,7 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     group.add(highlight);
 
     rotGroup.add(group);
-    objsRef.current = { group, labelGroup, highlight, labeled, positions, radii };
+    objsRef.current = { group, labelGroup, highlight, labeled, positions, radii, nodeMesh, nodeMat, lineMat, maxDepth };
     requestRender();
 
     return () => {
@@ -375,6 +392,70 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       objsRef.current = null;
     };
   }, [data, style, colorFor]);
+
+  // Auto-rotate is driven by a ref the render loop reads; Beautify also spins.
+  useEffect(() => {
+    autoRotateRef.current = autoRotate || beautify;
+    if (autoRotateRef.current) threeRef.current?.requestRender();
+  }, [autoRotate, beautify]);
+
+  // Node colours: depth-graded ramp when Beautify is on, else the group palette.
+  useEffect(() => {
+    const three = threeRef.current;
+    const objs = objsRef.current;
+    if (!three || !objs?.nodeMesh) return;
+    const nodes = nodesRef.current;
+    const { nodeMesh, maxDepth } = objs;
+    const inner = new THREE.Color(style.palette[0]);
+    const outer = new THREE.Color(style.palette[style.palette.length - 1]);
+    const c = new THREE.Color();
+    for (let i = 0; i < nodes.length; i++) {
+      if (beautify) {
+        const t = maxDepth ? (nodes[i].depth || 0) / maxDepth : 0;
+        c.copy(inner).lerp(outer, t);
+      } else {
+        c.set(colorFor(nodes[i]));
+      }
+      nodeMesh.setColorAt(i, c);
+    }
+    if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
+    three.requestRender();
+  }, [beautify, data, style, colorFor]);
+
+  // Link opacity + optional additive glow when Beautify is on (skip light styles).
+  useEffect(() => {
+    const three = threeRef.current;
+    const lineMat = objsRef.current?.lineMat;
+    if (!three || !lineMat) return;
+    const glow = beautify && style.id !== 'slate';
+    lineMat.opacity = beautify ? Math.max(linkOpacity, 0.5) : linkOpacity;
+    lineMat.blending = glow ? THREE.AdditiveBlending : THREE.NormalBlending;
+    lineMat.needsUpdate = true;
+    three.requestRender();
+  }, [linkOpacity, beautify, data, style]);
+
+  // Point size: rescale every instance around its stored base radius.
+  useEffect(() => {
+    nodeScaleRef.current = nodeScale;
+    const three = threeRef.current;
+    const objs = objsRef.current;
+    if (!three || !objs?.nodeMesh) return;
+    const nodes = nodesRef.current;
+    const { nodeMesh, radii } = objs;
+    const m4 = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const s = radii[i] * nodeScale;
+      pos.set(n.x, n.y, n.z);
+      scl.set(s, s, s);
+      nodeMesh.setMatrixAt(i, m4.compose(pos, quat, scl));
+    }
+    nodeMesh.instanceMatrix.needsUpdate = true;
+    three.requestRender();
+  }, [nodeScale, data]);
 
   // Apply selection: move the highlight shell and label the selected node.
   useEffect(() => {
@@ -393,7 +474,7 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     if (node) {
       highlight.visible = true;
       highlight.position.set(node.x, node.y, node.z);
-      highlight.scale.setScalar(nodeRadius(node) + 3);
+      highlight.scale.setScalar(nodeRadius(node) * nodeScaleRef.current + 3);
       if (node.label && !labeled.has(node.id)) {
         const sprite = makeLabelSprite(truncateLabel(node.label), style.label);
         positionLabel(sprite, node);
@@ -446,6 +527,7 @@ function sphericalTreeLayout(nodes, links) {
     const n = byId.get(id);
     if (!n || guard.has(id)) return;
     guard.add(id);
+    n.depth = depth;
     const phi = (phi0 + phi1) / 2;
     const theta = (theta0 + theta1) / 2;
     const radius = depth * R;
@@ -481,6 +563,12 @@ function sphericalTreeLayout(nodes, links) {
       n.x = 0;
       n.y = 0;
       n.z = 0;
+      n.depth = 0;
     }
   }
+  let maxDepth = 0;
+  for (const n of nodes) {
+    if (n.depth > maxDepth) maxDepth = n.depth;
+  }
+  return maxDepth;
 }
