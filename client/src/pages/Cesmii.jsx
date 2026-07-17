@@ -8,11 +8,28 @@ import PageHeader from '@/components/PageHeader';
 
 const BLANK = { endpoint: '', authenticator: '', role: '', userName: '', secret: '' };
 
-function isoDaysAgo(days) {
-  // Build a SMIP-friendly timestamp without relying on Date.now at module load
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// datetime-local wants a LOCAL "YYYY-MM-DDTHH:MM"; build one for now minus `days`.
+function localValue(days) {
   const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  return d.toISOString().slice(0, 19).replace('T', ' ') + '+00';
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
+
+// Convert a datetime-local value (local time) to the SMIP UTC form the API wants
+// ("2026-07-10 00:00:00+00"). Everything crosses the wire in UTC (see TIMEZONE).
+function localToSmip(local) {
+  const ms = Date.parse(local);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ') + '+00';
+}
+
+const RANGE_PRESETS = [
+  { label: '1h', days: 1 / 24 },
+  { label: '24h', days: 1 },
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 }
+];
 
 export default function Cesmii() {
   const [status, setStatus] = useState(null);
@@ -23,7 +40,7 @@ export default function Cesmii() {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState(null);
   const [samples, setSamples] = useState(null);
-  const [range, setRange] = useState({ startTime: isoDaysAgo(7), endTime: isoDaysAgo(0), maxSamples: 100 });
+  const [range, setRange] = useState({ start: localValue(7), end: localValue(0), maxSamples: 100 });
 
   const refreshStatus = () => api.cesmiiStatus().then(setStatus).catch(() => {});
 
@@ -68,7 +85,12 @@ export default function Cesmii() {
     setSelected(attr);
     setSamples(null);
     try {
-      const r = await api.cesmiiHistory({ ids: [attr.id], ...range });
+      const r = await api.cesmiiHistory({
+        ids: [attr.id],
+        startTime: localToSmip(range.start),
+        endTime: localToSmip(range.end),
+        maxSamples: range.maxSamples
+      });
       setSamples(r.samples);
     } catch (e) {
       toast.error(e.message);
@@ -192,11 +214,32 @@ export default function Cesmii() {
                 {selected ? selected.displayName : 'Time series'}
               </h2>
               <div className="mb-3 grid grid-cols-1 gap-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {RANGE_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => setRange((r) => ({ ...r, start: localValue(p.days), end: localValue(0) }))}
+                      className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-slate-400 transition hover:border-white/25 hover:text-slate-200"
+                    >
+                      Last {p.label}
+                    </button>
+                  ))}
+                </div>
                 <Field label="Start">
-                  <Input value={range.startTime} onChange={(e) => setRange({ ...range, startTime: e.target.value })} />
+                  <Input type="datetime-local" value={range.start} onChange={(e) => setRange({ ...range, start: e.target.value })} />
                 </Field>
                 <Field label="End">
-                  <Input value={range.endTime} onChange={(e) => setRange({ ...range, endTime: e.target.value })} />
+                  <Input type="datetime-local" value={range.end} onChange={(e) => setRange({ ...range, end: e.target.value })} />
+                </Field>
+                <Field label="Max samples">
+                  <Input
+                    type="number"
+                    min="1"
+                    max="5000"
+                    value={range.maxSamples}
+                    onChange={(e) => setRange({ ...range, maxSamples: Number(e.target.value) || 100 })}
+                  />
                 </Field>
                 {selected && (
                   <Button size="sm" variant="subtle" onClick={() => loadHistory(selected)}>

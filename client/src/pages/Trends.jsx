@@ -195,7 +195,12 @@ export default function Trends() {
           });
     query
       .then((r) => {
-        setData({ series: r.series || [], start, end });
+        // When a source returns no series at all for the requested tags (e.g. an
+        // empty/stopped recording), synthesize empty-point series so the chart
+        // shows "No samples in this range" rather than the misleading "pick a
+        // source and add tags" (which reads as if nothing was selected).
+        const series = r.series?.length ? r.series : tags.map((tag) => ({ tag, points: [] }));
+        setData({ series, start, end });
         setError('');
       })
       .catch((e) => setError(e.message))

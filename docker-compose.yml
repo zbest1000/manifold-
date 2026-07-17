@@ -53,6 +53,68 @@ services:
       mqtt:
         condition: service_healthy
 
+  # Two more broker instances with DISTINCT data (site-prefixed namespaces) so
+  # the Topics multi-broker view has genuinely different trees to merge.
+  mqtt2:
+    image: eclipse-mosquitto:2
+    container_name: manifold-mqtt2
+    hostname: mqtt2
+    restart: unless-stopped
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1884:1883"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
+  mqtt3:
+    image: eclipse-mosquitto:2
+    container_name: manifold-mqtt3
+    hostname: mqtt3
+    restart: unless-stopped
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1885:1883"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ok || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
+  simulator2:
+    build:
+      context: ./docker/simulator
+    container_name: manifold-simulator2
+    restart: unless-stopped
+    environment:
+      MQTT_URL: mqtt://mqtt2:1883
+      TICK_MS: "2000"
+      SIM_SCALE: "2"
+      SITE: north
+    depends_on:
+      mqtt2:
+        condition: service_healthy
+
+  simulator3:
+    build:
+      context: ./docker/simulator
+    container_name: manifold-simulator3
+    restart: unless-stopped
+    environment:
+      MQTT_URL: mqtt://mqtt3:1883
+      TICK_MS: "2500"
+      SIM_SCALE: "1"
+      SITE: south
+    depends_on:
+      mqtt3:
+        condition: service_healthy
+
   # Mock CESMII i3X server. Connect from the app at http://i3x:8080 (i3X page or
   # Discovery, which probes port 8080). Serves a small ISA-95 object hierarchy.
   i3x:

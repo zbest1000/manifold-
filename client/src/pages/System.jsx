@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Cpu, Radio, Workflow, Database, HardDriveDownload, ShieldCheck, BellRing, Tag, RefreshCw, AlertTriangle, Maximize2, X } from 'lucide-react';
+import { Activity, Cpu, Radio, Workflow, Database, HardDriveDownload, ShieldCheck, BellRing, Tag, RefreshCw, AlertTriangle, Maximize2, X, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import { Card, Button, EmptyState } from '@/components/ui';
@@ -166,9 +166,9 @@ function MetricModal({ label, value, unit, history, warn, onClose }) {
   );
 }
 
-function Section({ icon: Icon, title, children, warn }) {
+function Section({ icon: Icon, title, children, warn, sticky }) {
   return (
-    <Card className="p-4">
+    <Card className={`p-4 ${sticky ? 'sticky top-0 z-10' : ''}`}>
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
         <Icon size={15} className={warn ? 'text-amber-400' : 'text-accent-400'} /> {title}
       </h2>
@@ -177,6 +177,52 @@ function Section({ icon: Icon, title, children, warn }) {
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         {children}
       </div>
+    </Card>
+  );
+}
+
+// A Section whose tile count grows with the data (one per broker / recording).
+// Adds a count, a collapse toggle, and — past a threshold — a filter, so 30+
+// brokers don't become an unscrollable wall.
+function ScalableSection({ icon: Icon, title, items, renderItem, threshold = 12, warn }) {
+  const [open, setOpen] = useState(true);
+  const [q, setQ] = useState('');
+  const query = q.trim().toLowerCase();
+  const filtered = query ? items.filter((it) => String(it).toLowerCase().includes(query)) : items;
+  const showFilter = items.length > threshold;
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-sm font-semibold text-slate-200 transition hover:text-white">
+          <Icon size={15} className={warn ? 'text-amber-400' : 'text-accent-400'} /> {title}
+          <span className="rounded-full bg-white/5 px-1.5 py-0.5 text-2xs font-medium text-slate-400 tabular-nums">{items.length}</span>
+          {open ? <ChevronUp size={14} className="text-slate-500" /> : <ChevronDown size={14} className="text-slate-500" />}
+        </button>
+        {open && showFilter && (
+          <div className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-surface-950/60 px-2 py-1">
+            <Search size={12} className="text-slate-500" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter…"
+              className="w-28 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+            />
+          </div>
+        )}
+      </div>
+      {open && (
+        <>
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {filtered.map(renderItem)}
+          </div>
+          {filtered.length === 0 && <p className="py-3 text-center text-xs text-slate-500">No match for “{q}”.</p>}
+          {showFilter && filtered.length > 0 && filtered.length < items.length && (
+            <p className="mt-2 text-2xs text-slate-500">
+              Showing {filtered.length} of {items.length}.
+            </p>
+          )}
+        </>
+      )}
     </Card>
   );
 }
@@ -284,7 +330,7 @@ export default function System() {
       <div className="flex-1 space-y-4 overflow-y-auto p-6">
         {error && <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">Last poll failed: {error}</p>}
 
-        <Section icon={Activity} title="Process health" warn={loopWarn}>
+        <Section icon={Activity} title="Process health" warn={loopWarn} sticky>
           <GaugeTile metrics={metrics} hist={hist} name="manifold_process_uptime_seconds" label="Uptime" fmt={fmtUptime} />
           <GaugeTile metrics={metrics} hist={hist} name="manifold_process_memory_bytes" labels={{ kind: 'rss' }} label="Memory RSS" fmt={fmtBytes} />
           <GaugeTile metrics={metrics} hist={hist} name="manifold_process_memory_bytes" labels={{ kind: 'heap_used' }} label="Heap used" fmt={fmtBytes} />
@@ -302,8 +348,11 @@ export default function System() {
         </Section>
 
         {brokers.length > 0 && (
-          <Section icon={Radio} title="Broker ingest">
-            {brokers.map((b) => {
+          <ScalableSection
+            icon={Radio}
+            title="Broker ingest"
+            items={brokers}
+            renderItem={(b) => {
               const msgs = histFor(hist, 'manifold_broker_messages_received_total', { broker: b });
               return (
                 <StatTile
@@ -315,8 +364,8 @@ export default function System() {
                   history={deltas(msgs)}
                 />
               );
-            })}
-          </Section>
+            }}
+          />
         )}
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -348,8 +397,11 @@ export default function System() {
           </Section>
 
           {recordings.length > 0 && (
-            <Section icon={HardDriveDownload} title="Recorder">
-              {recordings.map((r) => (
+            <ScalableSection
+              icon={HardDriveDownload}
+              title="Recorder"
+              items={recordings}
+              renderItem={(r) => (
                 <StatTile
                   key={r}
                   label={r}
@@ -357,8 +409,8 @@ export default function System() {
                   unit="points"
                   history={deltas(histFor(hist, 'manifold_recorder_points_total', { recording: r }))}
                 />
-              ))}
-            </Section>
+              )}
+            />
           )}
         </div>
       </div>

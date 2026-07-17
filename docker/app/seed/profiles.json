@@ -11,6 +11,30 @@
         "reconnect": true,
         "reconnectPeriod": 5000
       }
+    },
+    "demo-mqtt2": {
+      "config": {
+        "id": "demo-mqtt2",
+        "name": "North Plant (mqtt2)",
+        "host": "mqtt2",
+        "port": 1883,
+        "protocol": "mqtt",
+        "autoSubscribe": true,
+        "reconnect": true,
+        "reconnectPeriod": 5000
+      }
+    },
+    "demo-mqtt3": {
+      "config": {
+        "id": "demo-mqtt3",
+        "name": "South Plant (mqtt3)",
+        "host": "mqtt3",
+        "port": 1883,
+        "protocol": "mqtt",
+        "autoSubscribe": true,
+        "reconnect": true,
+        "reconnectPeriod": 5000
+      }
     }
   },
   "opcua": {

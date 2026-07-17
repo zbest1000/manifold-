@@ -76,7 +76,7 @@ export default function ErrorLog({ collapsed = false }) {
       ) : (
         <button
           onClick={() => openLog()}
-          aria-label="View the event log (errors, warnings, info, verbose)"
+          title="View the event log (errors, warnings, info, verbose)"
           className={clsx(
             'flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60',
             unseen > 0

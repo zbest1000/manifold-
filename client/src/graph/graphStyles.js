@@ -118,7 +118,7 @@ export const LAYOUTS = {
   spacious: { id: 'spacious', name: 'Spacious', mode: 'force', charge: -520, linkDistance: 110, gravity: 0.03 },
   tight: { id: 'tight', name: 'Tight', mode: 'force', charge: -120, linkDistance: 34, gravity: 0.09 },
   radial: { id: 'radial', name: 'Radial', mode: 'radial', charge: -160, linkDistance: 50, ringGap: 120 },
-  tree: { id: 'tree', name: 'Tree', mode: 'tree', rowGap: 96, colGap: 76 },
+  tree: { id: 'tree', name: 'Tree', mode: 'tree', rowGap: 34, colGap: 46 },
   cluster: { id: 'cluster', name: 'Cluster', mode: 'cluster', charge: -90, linkDistance: 40, clusterRadius: 260 }
 };
 

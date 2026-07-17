@@ -5,7 +5,10 @@ const { EventEmitter } = require('events');
 const { isAllowedAddress } = require('./egressGuard');
 
 const DEFAULT_MQTT_PORTS = [1883, 8883];
-const DEFAULT_OPCUA_PORTS = [4840];
+// 4840 is the OPC UA default; 50000 is the well-known port for Microsoft's
+// opc-plc simulator (ubiquitous in OPC UA demos/testing, and what this project's
+// own demo server uses) — without it, discovery silently misses those servers.
+const DEFAULT_OPCUA_PORTS = [4840, 50000];
 const DEFAULT_I3X_PORTS = [80, 443, 8080];
 // Common base paths an i3X server might be mounted under; each open HTTP port is
 // checked for a live /info document at one of these prefixes.

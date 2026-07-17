@@ -14,10 +14,23 @@ import { groupColor, PROTOCOL_COLORS } from './buildGraph';
 const CAM_DIST = 950;
 const FOV = 50;
 const MAX_3D_NODES = 50000; // GPU instancing keeps this smooth
-const LABEL_COUNT = 40; // sprite labels for the highest-degree nodes only
+const LABEL_MAX = 400; // ceiling for sprite labels; labelDensity scales within it
+const VALUE_LABEL_MAX = 90; // fewer when live values are on (sprites rebuild per poll)
 const LINK_OPACITY = 0.35;
 const IDLE_MS = 2000; // keep the rAF loop alive this long after interaction
 const AUTO_ROTATE_SPEED = 0.0022; // rad/frame — a slow, cinematic spin
+const FLOW_COLOR = new THREE.Color('#ffffff'); // nodes flash toward this on a message
+const FLOW_TMP = new THREE.Color(); // reusable scratch for the pulse lerp
+const FLOW_DECAY = 0.9; // per-frame pulse decay
+
+// Activity-sizing: nodes swell with their message rate, then relax back to base.
+const ACT_DECAY = 0.96; // per-frame rate decay (slower than the colour pulse, so size lingers)
+const ACT_MAX = 6; // rate is clamped here before scaling
+const ACT_FACTOR = 0.2; // swell up to 1 + ACT_MAX*ACT_FACTOR = 2.2x at saturation
+const ACT_M4 = new THREE.Matrix4(); // reusable scratch for the per-instance matrix
+const ACT_POS = new THREE.Vector3();
+const ACT_SCL = new THREE.Vector3();
+const ACT_QUAT = new THREE.Quaternion();
 
 /** Strip the alpha channel from an rgba() color (link opacity is constant here). */
 function opaqueColor(color) {
@@ -37,39 +50,81 @@ function truncateLabel(label) {
   return s.length > 20 ? `${s.slice(0, 19)}…` : s;
 }
 
-/** Canvas-textured billboard label (halo + fill from the style's label colors). */
-function makeLabelSprite(text, labelStyle) {
-  const fontSize = 28;
+/**
+ * Canvas-textured billboard label (halo + fill from the style's label colors).
+ * If `valueText` is given it's drawn as a second, accent-coloured line, so the
+ * 3D view can show each node's latest value like the 2D "Values" overlay.
+ */
+function makeLabelSprite(text, labelStyle, valueText) {
+  const nameSize = 28;
+  const valSize = 23;
   const pad = 10;
-  const font = `600 ${fontSize}px Inter, sans-serif`;
+  const gap = 5;
+  const nameFont = `600 ${nameSize}px Inter, sans-serif`;
+  const valFont = `500 ${valSize}px 'JetBrains Mono', monospace`;
   const canvas = document.createElement('canvas');
   let ctx = canvas.getContext('2d');
-  ctx.font = font;
-  const w = Math.max(2, Math.ceil(ctx.measureText(text).width) + pad * 2);
-  const h = fontSize + pad * 2;
+  ctx.font = nameFont;
+  const nameW = Math.ceil(ctx.measureText(text).width);
+  let valW = 0;
+  if (valueText) {
+    ctx.font = valFont;
+    valW = Math.ceil(ctx.measureText(valueText).width);
+  }
+  const w = Math.max(2, Math.max(nameW, valW) + pad * 2);
+  const h = (valueText ? nameSize + gap + valSize : nameSize) + pad * 2;
   canvas.width = w;
   canvas.height = h;
   ctx = canvas.getContext('2d');
-  ctx.font = font;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.textBaseline = 'top';
+  // Name line
+  ctx.font = nameFont;
   ctx.lineWidth = 6;
   ctx.strokeStyle = labelStyle.halo;
-  ctx.strokeText(text, w / 2, h / 2);
+  ctx.strokeText(text, w / 2, pad);
   ctx.fillStyle = labelStyle.color;
-  ctx.fillText(text, w / 2, h / 2);
+  ctx.fillText(text, w / 2, pad);
+  // Value line (accent, dimmer)
+  if (valueText) {
+    ctx.font = valFont;
+    const vy = pad + nameSize + gap;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = labelStyle.halo;
+    ctx.strokeText(valueText, w / 2, vy);
+    ctx.fillStyle = '#7dd3fc';
+    ctx.fillText(valueText, w / 2, vy);
+  }
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  const worldH = 15; // world units; perspective scales it with distance
-  sprite.scale.set(worldH * (w / h), worldH, 1);
+  const px2world = 15 / (nameSize + pad * 2); // single-line height => 15 world units
+  sprite.scale.set(w * px2world, h * px2world, 1);
   return sprite;
 }
 
 function positionLabel(sprite, n) {
   sprite.position.set(n.x, n.y + nodeRadius(n) + 10, n.z);
+}
+
+// Node marker geometry — a visual mode beyond the default sphere. All are unit-
+// ish scaled so the per-instance radius still controls size.
+function makeNodeGeometry(shape) {
+  switch (shape) {
+    case 'cube':
+      return new THREE.BoxGeometry(1.55, 1.55, 1.55);
+    case 'diamond':
+      return new THREE.OctahedronGeometry(1.45);
+    case 'tetra':
+      return new THREE.TetrahedronGeometry(1.6);
+    case 'icosa':
+      return new THREE.IcosahedronGeometry(1.2);
+    case 'sphere':
+    default:
+      return new THREE.SphereGeometry(1, 14, 10);
+  }
 }
 
 function disposeObject(obj) {
@@ -91,7 +146,14 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     nodeScale = 1, // 0.5–2  point-size multiplier
     linkOpacity = LINK_OPACITY, // 0–0.8  link line opacity
     autoRotate = false, // gentle continuous spin
-    beautify = false // depth-graded colours + glow + auto-rotate
+    beautify = false, // depth-graded colours + glow + auto-rotate
+    labelDensity = 0.4, // 0–1  fraction of LABEL_MAX nodes to name
+    showValues = false, // draw each labelled node's latest value
+    nodeValues = null, // { [nodeId]: value } for the value line
+    nodeShape = 'sphere', // sphere | cube | diamond | tetra | icosa
+    flow = false, // flash nodes as messages arrive (live message flow)
+    activitySize = false, // swell nodes by their live message rate
+    activitySource = null // (pulse) => unsubscribe; fires a node id per message
   },
   ref
 ) {
@@ -106,6 +168,12 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
   const selSpriteRef = useRef(null);
   const autoRotateRef = useRef(false); // read by the render loop each frame
   const nodeScaleRef = useRef(nodeScale); // keeps the selection ring hugging scaled nodes
+  const flowRef = useRef(false); // keeps the loop alive while message-flow is on
+  const activitySizeRef = useRef(false); // keeps the loop alive while activity-sizing is on
+  const pulseRef = useRef(new Map()); // nodeId -> pulse intensity (0..1), decays per frame
+  const rateRef = useRef(new Map()); // nodeId -> message rate, decays per frame (activity sizing)
+  const idxRef = useRef(new Map()); // nodeId -> instance index
+  const baseColorRef = useRef([]); // per-index base THREE.Color, so a pulse can restore it
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
@@ -149,9 +217,78 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const loop = () => {
       raf = 0;
       if (autoRotateRef.current) rotRef.current.yaw += AUTO_ROTATE_SPEED;
+      // Message-flow: flash active nodes toward white, decaying back to base.
+      if (pulseRef.current.size) {
+        const mesh = objsRef.current?.nodeMesh;
+        if (mesh?.instanceColor) {
+          const bases = baseColorRef.current;
+          const idx = idxRef.current;
+          for (const [id, s] of pulseRef.current) {
+            const i = idx.get(id);
+            const base = i != null ? bases[i] : null;
+            if (base == null) {
+              pulseRef.current.delete(id);
+              continue;
+            }
+            const ns = s * FLOW_DECAY;
+            if (ns < 0.05) {
+              mesh.setColorAt(i, base);
+              pulseRef.current.delete(id);
+            } else {
+              mesh.setColorAt(i, FLOW_TMP.copy(base).lerp(FLOW_COLOR, ns));
+              pulseRef.current.set(id, ns);
+            }
+          }
+          mesh.instanceColor.needsUpdate = true;
+        } else {
+          pulseRef.current.clear();
+        }
+      }
+      // Activity-sizing: swell active nodes by their message rate, relaxing back
+      // to the stored base scale (radius * point-size multiplier) as it decays.
+      if (rateRef.current.size) {
+        const objs = objsRef.current;
+        const mesh = objs?.nodeMesh;
+        if (mesh && objs.radii) {
+          const idx = idxRef.current;
+          const { radii, positions } = objs;
+          for (const [id, v] of rateRef.current) {
+            const i = idx.get(id);
+            if (i == null) {
+              rateRef.current.delete(id);
+              continue;
+            }
+            const nv = v * ACT_DECAY;
+            const base = radii[i] * nodeScaleRef.current;
+            ACT_POS.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            if (nv < 0.05) {
+              ACT_SCL.set(base, base, base);
+              rateRef.current.delete(id);
+            } else {
+              const s = base * (1 + Math.min(nv, ACT_MAX) * ACT_FACTOR);
+              ACT_SCL.set(s, s, s);
+              rateRef.current.set(id, nv);
+            }
+            mesh.setMatrixAt(i, ACT_M4.compose(ACT_POS, ACT_QUAT, ACT_SCL));
+          }
+          mesh.instanceMatrix.needsUpdate = true;
+        } else {
+          rateRef.current.clear();
+        }
+      }
       renderFrame();
       const interacting = performance.now() - lastActive < IDLE_MS;
-      if ((interacting || autoRotateRef.current) && !document.hidden) raf = requestAnimationFrame(loop);
+      if (
+        (interacting ||
+          autoRotateRef.current ||
+          flowRef.current ||
+          activitySizeRef.current ||
+          pulseRef.current.size ||
+          rateRef.current.size) &&
+        !document.hidden
+      ) {
+        raf = requestAnimationFrame(loop);
+      }
     };
     const requestRender = (sustain = false) => {
       if (sustain) lastActive = performance.now();
@@ -306,7 +443,7 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const group = new THREE.Group();
 
     // Nodes: one instanced low-poly sphere with per-instance color + scale.
-    const nodeGeo = new THREE.SphereGeometry(1, 12, 8);
+    const nodeGeo = makeNodeGeometry(nodeShape);
     const nodeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const nodeMesh = new THREE.InstancedMesh(nodeGeo, nodeMat, Math.max(1, nodes.length));
     nodeMesh.count = nodes.length;
@@ -317,6 +454,8 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const col = new THREE.Color();
     const positions = new Float32Array(nodes.length * 3);
     const radii = new Float32Array(nodes.length);
+    const nodeIndex = new Map();
+    const baseColors = new Array(nodes.length);
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       const r = nodeRadius(n);
@@ -324,12 +463,19 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       positions[i * 3 + 1] = n.y;
       positions[i * 3 + 2] = n.z;
       radii[i] = r;
+      nodeIndex.set(n.id, i);
       pos.set(n.x, n.y, n.z);
       const s = r * nodeScaleRef.current;
       scl.set(s, s, s);
       nodeMesh.setMatrixAt(i, m4.compose(pos, quat, scl));
-      nodeMesh.setColorAt(i, col.set(colorFor(n)));
+      const c = new THREE.Color(colorFor(n));
+      baseColors[i] = c;
+      nodeMesh.setColorAt(i, c);
     }
+    idxRef.current = nodeIndex;
+    baseColorRef.current = baseColors;
+    pulseRef.current.clear();
+    rateRef.current.clear();
     nodeMesh.instanceMatrix.needsUpdate = true;
     if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
     group.add(nodeMesh);
@@ -360,17 +506,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       group.add(new THREE.LineSegments(lineGeo, lineMat));
     }
 
-    // Labels: sprites for the highest-degree nodes only (text is expensive).
+    // Labels are built (and rebuilt on density / value changes) by a dedicated
+    // effect below, so a value refresh doesn't rebuild the whole scene.
     const labelGroup = new THREE.Group();
     const labeled = new Set();
-    const byDegree = nodes.slice().sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, LABEL_COUNT);
-    for (const n of byDegree) {
-      if (!n.label) continue;
-      const sprite = makeLabelSprite(truncateLabel(n.label), style.label);
-      positionLabel(sprite, n);
-      labelGroup.add(sprite);
-      labeled.add(n.id);
-    }
     group.add(labelGroup);
 
     // Selection highlight: a wireframe shell scaled around the selected node.
@@ -391,13 +530,80 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       selSpriteRef.current = null;
       objsRef.current = null;
     };
-  }, [data, style, colorFor]);
+  }, [data, style, colorFor, nodeShape]);
+
+  // Labels: name (and, with Values on, the latest value) for the top-degree
+  // nodes, up to a density-scaled cap. Rebuilds on density / value changes only,
+  // not on every scene rebuild. When Values is on, nodeValues changes each poll,
+  // so labels refresh live (capped lower to keep the sprite churn cheap).
+  useEffect(() => {
+    const three = threeRef.current;
+    const objs = objsRef.current;
+    if (!three || !objs?.labelGroup) return;
+    const { labelGroup, labeled } = objs;
+    for (const c of [...labelGroup.children]) {
+      if (c === selSpriteRef.current) continue;
+      labelGroup.remove(c);
+      disposeObject(c);
+    }
+    labeled.clear();
+    const nodes = nodesRef.current;
+    const cap = Math.min(showValues ? VALUE_LABEL_MAX : LABEL_MAX, Math.max(0, Math.round(LABEL_MAX * labelDensity)));
+    // With Values on, prefer nodes that actually HAVE a value (leaves) so the
+    // data is visible; otherwise rank by degree so the structural hubs are named.
+    const ranked = nodes.slice().sort((a, b) => {
+      if (showValues && nodeValues) {
+        const av = nodeValues[a.id] != null && nodeValues[a.id] !== '' ? 1 : 0;
+        const bv = nodeValues[b.id] != null && nodeValues[b.id] !== '' ? 1 : 0;
+        if (av !== bv) return bv - av;
+      }
+      return (b.degree || 0) - (a.degree || 0);
+    });
+    const byDegree = ranked.slice(0, cap);
+    for (const n of byDegree) {
+      if (!n.label) continue;
+      let valueText;
+      if (showValues && nodeValues) {
+        const v = nodeValues[n.id];
+        if (v != null && v !== '') valueText = String(v).slice(0, 18);
+      }
+      const sprite = makeLabelSprite(truncateLabel(n.label), style.label, valueText);
+      positionLabel(sprite, n);
+      labelGroup.add(sprite);
+      labeled.add(n.id);
+    }
+    three.requestRender();
+  }, [data, style, labelDensity, showValues, nodeValues]);
 
   // Auto-rotate is driven by a ref the render loop reads; Beautify also spins.
   useEffect(() => {
     autoRotateRef.current = autoRotate || beautify;
     if (autoRotateRef.current) threeRef.current?.requestRender();
   }, [autoRotate, beautify]);
+
+  // Live activity: subscribe to the message bus once for both features. Flow
+  // flashes a node's colour; Activity bumps its rate so the render loop swells
+  // it. flowRef keeps the loop running continuously while flow is on; activity
+  // rides the loop only while there are non-zero rates to decay.
+  useEffect(() => {
+    flowRef.current = flow;
+    activitySizeRef.current = activitySize;
+    threeRef.current?.requestRender(); // kick the loop so a toggle-off can decay out
+    if ((!flow && !activitySize) || !activitySource) {
+      return undefined;
+    }
+    const unsub = activitySource((id) => {
+      if (!idxRef.current.has(id)) return;
+      if (flow) pulseRef.current.set(id, 1);
+      if (activitySize) rateRef.current.set(id, (rateRef.current.get(id) || 0) + 1);
+      threeRef.current?.requestRender();
+    });
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      flowRef.current = false;
+      activitySizeRef.current = false;
+    };
+  }, [flow, activitySize, activitySource]);
 
   // Node colours: depth-graded ramp when Beautify is on, else the group palette.
   useEffect(() => {
@@ -408,8 +614,9 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const { nodeMesh, maxDepth } = objs;
     const inner = new THREE.Color(style.palette[0]);
     const outer = new THREE.Color(style.palette[style.palette.length - 1]);
-    const c = new THREE.Color();
+    const bases = baseColorRef.current;
     for (let i = 0; i < nodes.length; i++) {
+      const c = bases[i] || (bases[i] = new THREE.Color());
       if (beautify) {
         const t = maxDepth ? (nodes[i].depth || 0) / maxDepth : 0;
         c.copy(inner).lerp(outer, t);
@@ -476,7 +683,9 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       highlight.position.set(node.x, node.y, node.z);
       highlight.scale.setScalar(nodeRadius(node) * nodeScaleRef.current + 3);
       if (node.label && !labeled.has(node.id)) {
-        const sprite = makeLabelSprite(truncateLabel(node.label), style.label);
+        const v = nodeValues ? nodeValues[node.id] : null;
+        const valueText = v != null && v !== '' ? String(v).slice(0, 18) : undefined;
+        const sprite = makeLabelSprite(truncateLabel(node.label), style.label, valueText);
         positionLabel(sprite, node);
         labelGroup.add(sprite);
         selSpriteRef.current = sprite;

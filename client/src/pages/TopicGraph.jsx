@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, ChevronDown, ChevronUp, Sparkles, RotateCw, PanelRight } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, PanelRight, ChevronDown, Check, Radio } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -20,10 +20,11 @@ function RendererLoading() {
     </div>
   );
 }
-import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
+import { buildMqttGraph, buildAllBrokersGraph, collapseGraph } from '@/graph/buildGraph';
 import { DEFAULT_LAYOUT } from '@/graph/graphStyles';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphLegend from '@/components/GraphLegend';
+import Graph3DControls from '@/components/Graph3DControls';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
 import TopicTree from '@/components/TopicTree';
@@ -67,10 +68,11 @@ export default function TopicGraph() {
   const flowEnabled = useStore((s) => s.flowEnabled);
   const activitySize = useStore((s) => s.activitySize);
   const showValues = useStore((s) => s.showValues);
+  const setShowValues = useStore((s) => s.setShowValues);
   const showMinimap = useStore((s) => s.showMinimap);
   const setTopics = useStore((s) => s.setTopics);
 
-  const [brokerId, setBrokerId] = useState(null);
+  const [selectedBrokers, setSelectedBrokers] = useState([]); // broker ids to graph
   const [spHosts, setSpHosts] = useState([]); // Sparkplug host applications (spBv1.0/STATE/*)
   const [selected, setSelected] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -92,9 +94,25 @@ export default function TopicGraph() {
   const [linkOpacity3d, setLinkOpacity3d] = useState(0.35);
   const [autoRotate3d, setAutoRotate3d] = useState(false);
   const [beautify3d, setBeautify3d] = useState(false);
+  const [labelDensity3d, setLabelDensity3d] = useState(0.4);
+  const [nodeShape3d, setNodeShape3d] = useState('sphere');
+  const [flow3d, setFlow3d] = useState(false);
+  const [activitySize3d, setActivitySize3d] = useState(false);
+  const [beautify2d, setBeautify2d] = useState(false); // 2D visual mode: radial + bloom
   const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
+
+  const connected = brokers.filter((b) => b.status === 'connected');
+  const connectedIds = connected.map((b) => b.id).join(',');
+  // Which brokers to graph. Empty = show none; 1 = single tree; 2+ = merged
+  // multi-broker view. Kept in connected-order so the primary is stable.
+  const activeBrokers = connected.filter((b) => selectedBrokers.includes(b.id));
+  const activeIds = activeBrokers.map((b) => b.id).join(',');
+  const multi = activeBrokers.length > 1;
+  const brokerId = activeBrokers[0]?.id || null; // primary broker for single-broker surfaces
+  const toggleBroker = (id) =>
+    setSelectedBrokers((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   // Select a topic from the tree, shaping it like a graph node so the shared
   // detail panel works for both views.
@@ -117,27 +135,28 @@ export default function TopicGraph() {
     [brokerId]
   );
 
-  const connected = brokers.filter((b) => b.status === 'connected');
-
-  // Default to the first connected broker
+  // Seed with the first connected broker; prune any that disconnected; never
+  // leave the selection empty while a broker is connected.
   useEffect(() => {
-    if (!brokerId && connected.length) setBrokerId(connected[0].id);
-    if (brokerId && !brokers.some((b) => b.id === brokerId)) setBrokerId(connected[0]?.id || null);
-  }, [connected, brokerId, brokers]);
+    if (!connected.length) return;
+    setSelectedBrokers((prev) => {
+      const valid = prev.filter((id) => connected.some((b) => b.id === id));
+      if (valid.length) return valid.length === prev.length ? prev : valid;
+      return [connected[0].id];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedIds]);
 
-  // Pull the authoritative topic list when broker changes
+  // Pull the authoritative topic list for every active broker.
   useEffect(() => {
-    if (!brokerId) return;
-    api
-      .brokerTopics(brokerId)
-      .then((res) => setTopics(brokerId, res.topics))
-      .catch(() => {});
-  }, [brokerId, setTopics]);
+    activeBrokers.forEach((b) => api.brokerTopics(b.id).then((res) => setTopics(b.id, res.topics)).catch(() => {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIds, setTopics]);
 
   // Sparkplug host applications (spBv1.0/STATE/*) — polled from the topology
   // snapshot; the strip only shows when the broker actually carries host STATE.
   useEffect(() => {
-    if (!brokerId) {
+    if (!brokerId || multi) {
       setSpHosts([]);
       return;
     }
@@ -159,6 +178,9 @@ export default function TopicGraph() {
 
   const broker = brokers.find((b) => b.id === brokerId);
   const topicVersion = topicVersionMap[brokerId] || 0;
+  // Combined topic-version across all connected brokers so all-mode recomputes
+  // when ANY broker's topic set changes.
+  const allTopicVersion = connected.reduce((s, b) => s + (topicVersionMap[b.id] || 0), 0);
 
   // Read the topic list from the non-reactive index; recompute only when the
   // topic SET changes (topicVersion), not on every message.
@@ -169,10 +191,14 @@ export default function TopicGraph() {
 
   const GRAPH_MAX_NODES = 2500;
   const fullGraph = useMemo(() => {
-    if (!broker) return { nodes: [], links: [] };
-    return buildMqttGraph(broker, brokerTopics, { maxNodes: showAll ? Infinity : GRAPH_MAX_NODES });
+    if (!activeBrokers.length) return { nodes: [], links: [] };
+    if (multi) {
+      const topicsByBroker = Object.fromEntries(activeBrokers.map((b) => [b.id, useStore.getState().getTopics(b.id)]));
+      return buildAllBrokersGraph(activeBrokers, topicsByBroker, { maxNodes: showAll ? Infinity : GRAPH_MAX_NODES });
+    }
+    return buildMqttGraph(activeBrokers[0], brokerTopics, { maxNodes: showAll ? Infinity : GRAPH_MAX_NODES });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [broker?.id, brokerTopics, showAll]);
+  }, [activeIds, multi, allTopicVersion, brokerTopics, showAll]);
 
   // Apply collapsed subtrees. Keyed on the collapsed set so toggling re-filters.
   const collapseKey = [...collapsed].sort().join('|');
@@ -183,6 +209,51 @@ export default function TopicGraph() {
   );
   // Groups actually present, for the color legend.
   const groupsPresent = useMemo(() => new Set(graph.nodes.map((n) => n.group)), [graph]);
+
+  // Toolbar collapse/expand: collapse everything below `level` (Infinity = show
+  // all). Depth is a BFS from the roots of the full (uncollapsed) graph.
+  // Re-frame the graph after collapse/expand changes the visible node set (the
+  // one-shot auto-fit doesn't re-run, so a new layout would sit off-screen).
+  const refitSoon = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => graphRef.current?.fitTo()));
+  }, []);
+
+  const expandToLevel = useCallback(
+    (level) => {
+      if (!Number.isFinite(level)) {
+        setCollapsed(new Set());
+        refitSoon();
+        return;
+      }
+      const childrenOf = new Map();
+      const incoming = new Set();
+      for (const l of fullGraph.links) {
+        const s = endId(l.source);
+        const t = endId(l.target);
+        if (!childrenOf.has(s)) childrenOf.set(s, []);
+        childrenOf.get(s).push(t);
+        incoming.add(t);
+      }
+      const depth = new Map();
+      const queue = fullGraph.nodes.filter((n) => !incoming.has(n.id)).map((n) => (depth.set(n.id, 0), [n.id, 0]));
+      while (queue.length) {
+        const [id, d] = queue.shift();
+        for (const c of childrenOf.get(id) || []) {
+          if (!depth.has(c)) {
+            depth.set(c, d + 1);
+            queue.push([c, d + 1]);
+          }
+        }
+      }
+      const next = new Set();
+      for (const n of fullGraph.nodes) {
+        if ((depth.get(n.id) ?? 0) >= level && childrenOf.get(n.id)?.length) next.add(n.id);
+      }
+      setCollapsed(next);
+      refitSoon();
+    },
+    [fullGraph, refitSoon]
+  );
 
   // "Show coverage on topic map" from the Flows view: jump to the graph so the
   // painted trail is immediately visible.
@@ -257,14 +328,17 @@ export default function TopicGraph() {
   }, [brokerId, liveMsgs]);
 
   // Feed live message activity to the graph's flow animation. Maps an incoming
-  // message on this broker to its leaf node id (see buildMqttGraph node ids).
+  // message on any ACTIVE broker to its leaf node id (works in multi-broker mode
+  // too, since node ids are namespaced per broker).
   const activitySource = useCallback(
-    (pulse) =>
-      onMessageActivity((msg) => {
-        if (msg.brokerId !== brokerId) return;
-        pulse(`topic:${brokerId}:${msg.topic}`);
-      }),
-    [brokerId]
+    (pulse) => {
+      const active = new Set(activeIds.split(',').filter(Boolean));
+      return onMessageActivity((msg) => {
+        if (!active.has(msg.brokerId)) return;
+        pulse(`topic:${msg.brokerId}:${msg.topic}`);
+      });
+    },
+    [activeIds]
   );
 
   // Double-click a branch node to collapse/expand its subtree.
@@ -278,7 +352,7 @@ export default function TopicGraph() {
     });
   }, []);
 
-  const replayNodeId = useCallback((m) => `topic:${brokerId}:${m.topic}`, [brokerId]);
+  const replayNodeId = useCallback((m) => `topic:${m.brokerId || brokerId}:${m.topic}`, [brokerId]);
 
   // Frame the whole network when Show all is toggled on.
   useEffect(() => {
@@ -310,7 +384,13 @@ export default function TopicGraph() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="Topics"
-        subtitle={broker ? `${brokerTopics.length} topics · ${graph.nodes.length} nodes` : 'Select a broker'}
+        subtitle={
+          multi
+            ? `${activeBrokers.length} brokers · ${graph.nodes.length} nodes`
+            : broker
+              ? `${brokerTopics.length} topics · ${graph.nodes.length} nodes`
+              : 'Select a broker'
+        }
         actions={
           <div className="flex items-center gap-2">
             <div className="flex overflow-hidden rounded-xl border border-white/10">
@@ -318,20 +398,22 @@ export default function TopicGraph() {
               <ViewTab active={view === '3d'} onClick={() => setView('3d')} icon={Box} label="3D" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
             </div>
-            <select
-              value={brokerId || ''}
-              onChange={(e) => {
-                setBrokerId(e.target.value);
+            <BrokerMultiSelect
+              connected={connected}
+              selected={selectedBrokers}
+              onToggle={(id) => {
+                toggleBroker(id);
                 setSelected(null);
               }}
-              className="rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-200 focus:border-accent-500/60 focus:outline-none"
-            >
-              {connected.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+              onOnly={(id) => {
+                setSelectedBrokers([id]);
+                setSelected(null);
+              }}
+              onAll={() => {
+                setSelectedBrokers(connected.map((b) => b.id));
+                setSelected(null);
+              }}
+            />
           </div>
         }
       />
@@ -392,6 +474,13 @@ export default function TopicGraph() {
                 linkOpacity={linkOpacity3d}
                 autoRotate={autoRotate3d}
                 beautify={beautify3d}
+                labelDensity={labelDensity3d}
+                showValues={showValues}
+                nodeValues={showValues ? nodeValues : null}
+                nodeShape={nodeShape3d}
+                flow={flow3d}
+                activitySize={activitySize3d}
+                activitySource={activitySource}
               />
             </Suspense>
             <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
@@ -427,6 +516,16 @@ export default function TopicGraph() {
               onNodeScale={setNodeScale3d}
               linkOpacity={linkOpacity3d}
               onLinkOpacity={setLinkOpacity3d}
+              labelDensity={labelDensity3d}
+              onLabelDensity={setLabelDensity3d}
+              showValues={showValues}
+              onShowValues={() => setShowValues(!showValues)}
+              nodeShape={nodeShape3d}
+              onNodeShape={setNodeShape3d}
+              flow={flow3d}
+              onFlow={() => setFlow3d((v) => !v)}
+              activitySize={activitySize3d}
+              onActivitySize={() => setActivitySize3d((v) => !v)}
             />
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate. Scroll to zoom. Click a node for details. The style dropdown up top restyles this view too.
@@ -437,15 +536,21 @@ export default function TopicGraph() {
           <div className="relative flex-1">
             {!showAll && (
               <>
-                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} onSelect={selectNode} />
                 <GraphToolbar
                   showFlow
                   onFit={() => graphRef.current?.fitTo()}
-                  onBeautify={() => setGraphLayout(graphLayout === 'radial' ? DEFAULT_LAYOUT : 'radial')}
+                  onBeautify={() => {
+                    const on = !beautify2d;
+                    setBeautify2d(on);
+                    setGraphLayout(on ? 'radial' : DEFAULT_LAYOUT);
+                  }}
+                  beautifyActive={beautify2d}
                   onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), `topic-graph-${brokerId}.png`)}
                   onExportJson={() => downloadJson(graphRef.current?.exportGraph(), `topic-graph-${brokerId}.json`)}
                   onProperties={() => setPanelOpen(true)}
                   hasSelection={Boolean(selected)}
+                  onExpandLevel={expandToLevel}
                 />
               </>
             )}
@@ -470,6 +575,7 @@ export default function TopicGraph() {
                 nodeValues={showValues ? nodeValues : null}
                 matchIds={coverage?.brokerId === brokerId ? coverage.matchIds : matchIds}
                 minimap={showMinimap}
+                beautify={beautify2d}
               />
             )}
             <GraphLegend styleId={graphStyle} groups={groupsPresent} />
@@ -601,55 +707,63 @@ function SegBtn({ active, onClick, disabled, title, children }) {
   );
 }
 
-// Legend + group labels now live in components/GraphLegend.jsx (shared).
+// Legend + group labels live in components/GraphLegend.jsx; the 3D look-and-feel
+// controls live in components/Graph3DControls.jsx (both shared across views).
 
-// Look-and-feel controls for the 3D view (Beautify + auto-rotate + size/link sliders).
-function Graph3DControls({ beautify, onBeautify, autoRotate, onAutoRotate, nodeScale, onNodeScale, linkOpacity, onLinkOpacity }) {
+// Multi-select of connected brokers: pick one, several, or all. Selecting 2+
+// merges their topic trees into one graph. Each row can toggle, or "only" it.
+function BrokerMultiSelect({ connected, selected, onToggle, onOnly, onAll }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDoc);
+    return () => document.removeEventListener('pointerdown', onDoc);
+  }, []);
+  const activeCount = connected.filter((b) => selected.includes(b.id)).length;
+  const label = activeCount === 0 ? 'No brokers' : activeCount === 1 ? connected.find((b) => selected.includes(b.id))?.name : `${activeCount} brokers`;
   return (
-    <div className="absolute left-4 top-4 z-10 w-52 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-slate-300 backdrop-blur">
-      <div className="flex items-stretch">
-        <button
-          onClick={onBeautify}
-          title="Depth-graded colours, glowing links, and a slow spin"
-          className={clsx(
-            'flex flex-1 items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
-            beautify ? 'bg-accent-500/20 text-accent-200' : 'text-slate-300 hover:text-slate-100'
-          )}
-        >
-          <Sparkles size={15} className={beautify ? 'text-accent-300' : ''} /> Beautify
-        </button>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          title="Look and feel"
-          className="border-l border-white/10 px-2.5 text-slate-400 transition hover:text-slate-200"
-        >
-          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-      </div>
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-200 transition hover:border-white/20"
+      >
+        <Radio size={14} className="text-accent-400" />
+        <span className="max-w-[180px] truncate font-medium">{label}</span>
+        <ChevronDown size={14} className={clsx('text-slate-500 transition', open && 'rotate-180')} />
+      </button>
       {open && (
-        <div className="space-y-3 border-t border-white/5 px-3 py-3">
-          <button
-            onClick={onAutoRotate}
-            className={clsx(
-              'flex w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
-              autoRotate ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
-            )}
-          >
-            <RotateCw size={13} className={autoRotate ? 'text-accent-300' : ''} /> Auto-rotate
-          </button>
-          <label className="block">
-            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
-              Node size <span className="tabular-nums text-slate-500">{nodeScale.toFixed(1)}×</span>
-            </span>
-            <input type="range" min="0.5" max="2" step="0.1" value={nodeScale} onChange={(e) => onNodeScale(Number(e.target.value))} className="w-full accent-accent-500" />
-          </label>
-          <label className="block">
-            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
-              Links <span className="tabular-nums text-slate-500">{Math.round(linkOpacity * 100)}%</span>
-            </span>
-            <input type="range" min="0.05" max="0.8" step="0.05" value={linkOpacity} onChange={(e) => onLinkOpacity(Number(e.target.value))} className="w-full accent-accent-500" />
-          </label>
+        <div className="absolute right-0 z-30 mt-1 w-72 overflow-hidden rounded-xl border border-white/10 bg-surface-900/95 shadow-2xl backdrop-blur">
+          <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
+            <span className="text-2xs uppercase tracking-wide text-slate-500">Brokers ({connected.length})</span>
+            <button onClick={onAll} className="text-2xs font-medium text-accent-300 hover:text-accent-200">
+              Select all
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto py-1">
+            {connected.map((b) => {
+              const on = selected.includes(b.id);
+              return (
+                <div key={b.id} className="group flex items-center gap-2 px-2 py-1.5 hover:bg-white/5">
+                  <button onClick={() => onToggle(b.id)} className="flex flex-1 items-center gap-2 text-left">
+                    <span className={clsx('grid h-4 w-4 shrink-0 place-items-center rounded border', on ? 'border-accent-500 bg-accent-500/20' : 'border-white/20')}>
+                      {on && <Check size={11} className="text-accent-300" />}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-200">{b.name}</span>
+                  </button>
+                  <button
+                    onClick={() => onOnly(b.id)}
+                    className="rounded px-1.5 py-0.5 text-2xs font-medium text-slate-500 opacity-0 transition hover:bg-white/10 hover:text-slate-200 group-hover:opacity-100"
+                    title="Show only this broker"
+                  >
+                    only
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

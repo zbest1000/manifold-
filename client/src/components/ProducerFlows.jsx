@@ -88,7 +88,7 @@ export default function ProducerFlows({ broker }) {
             styleId={graphStyle}
             layoutId="radial"
             selectedId={selected}
-            onSelect={setSelected}
+            onSelect={(n) => setSelected(n.id)}
           />
         ) : (
           <div className="grid h-full place-items-center p-8">

@@ -523,10 +523,47 @@ function computeDegree(nodes, links) {
 // Stable color assignment per group index, resolved against the active palette.
 export const GROUP_ORDER = ['broker', 'server', 'topic', 'telemetry', 'data', 'command', 'config', 'alarm', 'sparkplug'];
 
+// Fixed, semantic colour per node group. Previously groupColor indexed into the
+// active style's palette (palette[idx % len]) — but the styles are short and
+// sometimes single-hue, so different groups collided to the SAME colour and the
+// legend couldn't tell them apart. These nine distinct hues are shared by every
+// renderer AND the legend (both call groupColor), so the legend always matches
+// the on-screen node colour, and each group is now visually distinct.
+export const GROUP_COLORS = {
+  broker: '#a78bfa', // violet — the root/broker
+  server: '#818cf8', // indigo — OPC UA / i3X server root
+  topic: '#38bdf8', // sky — branch (intermediate topic)
+  telemetry: '#34d399', // green — live/connected telemetry
+  data: '#fbbf24', // amber — leaf data topics
+  command: '#f472b6', // pink — command topics
+  config: '#2dd4bf', // teal — configuration
+  alarm: '#fb7185', // red — alarm / offline / dormant
+  sparkplug: '#fb923c' // orange — Sparkplug
+};
+
 export function groupColor(group, palette) {
-  const idx = GROUP_ORDER.indexOf(group);
-  if (idx === -1) return palette[0];
-  return palette[idx % palette.length];
+  return GROUP_COLORS[group] || palette?.[0] || '#38bdf8';
+}
+
+/**
+ * Merge every connected broker into one graph, each broker's topic tree hanging
+ * off a synthetic "All brokers" root. Node ids are already namespaced per broker
+ * (broker:ID, topic:ID:PATH) so there are no collisions. A per-broker node budget
+ * keeps one busy broker from crowding out the others.
+ */
+export function buildAllBrokersGraph(brokers, topicsByBroker, { maxNodes = Infinity } = {}) {
+  const perBrokerCap = Number.isFinite(maxNodes) ? Math.max(50, Math.floor(maxNodes / Math.max(1, brokers.length))) : Infinity;
+  const rootId = 'all:root';
+  const nodes = [{ id: rootId, label: 'All brokers', group: 'broker', kind: 'all-root', degree: 0, meta: { allBrokers: true } }];
+  const links = [];
+  for (const b of brokers) {
+    const g = buildMqttGraph(b, topicsByBroker[b.id] || [], { maxNodes: perBrokerCap });
+    for (const n of g.nodes) nodes.push(n);
+    for (const l of g.links) links.push(l);
+    // Hang each broker's root under the synthetic all-root.
+    if (g.nodes.some((n) => n.id === `broker:${b.id}`)) links.push({ source: rootId, target: `broker:${b.id}`, kind: 'broker' });
+  }
+  return { nodes, links };
 }
 
 /**

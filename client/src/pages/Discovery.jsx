@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Radar, Play, Square, Radio, Cpu, Plug, Boxes } from 'lucide-react';
+import { Radar, Play, Square, Radio, Cpu, Plug, Boxes, Loader2, Check, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
@@ -12,6 +12,22 @@ export default function Discovery() {
   const navigate = useNavigate();
   const [range, setRange] = useState('');
   const [busy, setBusy] = useState(false);
+  // Per-result connect status so the button reports the real outcome instead of
+  // a fire-and-forget "Connecting…" toast: key -> { state, msg }.
+  const [connState, setConnState] = useState({});
+  const resultKey = (r) => `${r.host}:${r.port}`;
+
+  // Watch the live broker list (socket-updated) for the just-connected host so
+  // we can show connected vs error, rather than assuming the request succeeded.
+  const waitForBroker = async (host, port) => {
+    for (let i = 0; i < 16; i++) {
+      const b = (useStore.getState().brokers || []).find((x) => x.host === host && Number(x.port) === Number(port));
+      if (b?.status === 'connected') return { ok: true };
+      if (b?.status === 'error') return { ok: false, msg: b.lastError || 'Connection failed' };
+      await new Promise((done) => setTimeout(done, 500));
+    }
+    return { ok: false, msg: 'Timed out waiting for the connection' };
+  };
 
   const start = async () => {
     setBusy(true);
@@ -34,19 +50,32 @@ export default function Discovery() {
   };
 
   const connectResult = async (r) => {
+    const key = resultKey(r);
+    const mark = (state, msg) => setConnState((s) => ({ ...s, [key]: { state, msg } }));
+    mark('connecting');
     try {
       if (r.kind === 'mqtt') {
         await api.connectBroker({ host: r.host, port: r.port, protocol: r.port === 8883 ? 'mqtts' : 'mqtt' });
-        toast.success(`Connecting to ${r.host}:${r.port}`);
+        const res = await waitForBroker(r.host, r.port);
+        if (res.ok) {
+          mark('connected');
+          toast.success(`Connected to ${r.host}:${r.port}`);
+        } else {
+          mark('error', res.msg);
+          toast.error(res.msg);
+        }
       } else if (r.kind === 'opcua') {
         await api.connectOpcua({ endpointUrl: r.endpointUrl || `opc.tcp://${r.host}:${r.port}` });
-        toast.success(`Connecting to ${r.host}:${r.port}`);
+        mark('connected');
+        toast.success(`Connected to ${r.host}:${r.port}`);
       } else if (r.kind === 'i3x') {
         await api.i3xConnect({ baseUrl: r.baseUrl });
+        mark('connected');
         toast.success(`Connected to i3X at ${r.baseUrl}`);
         navigate('/i3x');
       }
     } catch (e) {
+      mark('error', e.message);
       toast.error(e.message);
     }
   };
@@ -154,10 +183,41 @@ export default function Discovery() {
                       {r.serverName ? `${r.serverName} · ` : ''}{r.baseUrl}
                     </p>
                   )}
-                  <div className="mt-3 flex justify-end">
-                    <Button size="sm" variant="subtle" onClick={() => connectResult(r)}>
-                      <Plug size={13} /> Connect
-                    </Button>
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    {(() => {
+                      const cs = connState[resultKey(r)];
+                      if (cs?.state === 'connecting') {
+                        return (
+                          <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                            <Loader2 size={13} className="animate-spin" /> Connecting…
+                          </span>
+                        );
+                      }
+                      if (cs?.state === 'connected') {
+                        return (
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+                            <Check size={13} /> Connected
+                          </span>
+                        );
+                      }
+                      if (cs?.state === 'error') {
+                        return (
+                          <>
+                            <span className="flex items-center gap-1 truncate text-xs text-rose-400" title={cs.msg}>
+                              <AlertTriangle size={12} /> Failed
+                            </span>
+                            <Button size="sm" variant="subtle" onClick={() => connectResult(r)}>
+                              <Plug size={13} /> Retry
+                            </Button>
+                          </>
+                        );
+                      }
+                      return (
+                        <Button size="sm" variant="subtle" onClick={() => connectResult(r)}>
+                          <Plug size={13} /> Connect
+                        </Button>
+                      );
+                    })()}
                   </div>
                 </Card>
                 );

@@ -117,7 +117,16 @@ export function Sparkline({ values, height = 28, warn = false, area = true }) {
     }),
     [color, area, flat]
   );
-  if (nums.length < 2) return <div style={{ height, width: '100%' }} />;
+  if (nums.length < 2) {
+    // Not enough samples yet (needs >=2, ~6s after a restart). Show a faint
+    // baseline instead of an empty box so a stat tile doesn't read as broken
+    // on first paint.
+    return (
+      <div style={{ height, width: '100%' }} className="flex items-center">
+        <div style={{ height: 1, width: '100%', background: withAlpha(color, 0.2) }} />
+      </div>
+    );
+  }
   return <UplotChart options={options} data={data} height={height} className="u-spark" />;
 }
 

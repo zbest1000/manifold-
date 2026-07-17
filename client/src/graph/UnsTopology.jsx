@@ -232,6 +232,12 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       for (const r of fresh) {
         seededRef.current.add(r.brokerId);
         next.add(`${r.brokerId}:`);
+        // Mounts (OPC UA / i3X address spaces) can be hundreds of nodes deep, so
+        // seeding their level-1 children fully expanded dominates the forest and
+        // shrinks the broker trees — the thing you usually want — to an unreadable
+        // sliver. Open a mount only to its root; the user expands what they need.
+        // Broker namespaces still open to level 1.
+        if (String(r.brokerId).startsWith('mount:')) continue;
         for (const child of r.children.values()) next.add(`${child.brokerId}:${child.path}`);
       }
       return next;

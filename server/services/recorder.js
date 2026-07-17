@@ -125,6 +125,36 @@ class Recorder {
     return stream;
   }
 
+  /**
+   * Rotate a full segment: flush + close the current file, move it to ".1" (the
+   * one previous segment we keep), and reset so the next write starts a fresh
+   * file. A ring buffer of two segments bounds a recording to ~maxBytes while
+   * always retaining recent history — recording never stops. Fire-and-forget
+   * from onMessage; `s.rolling` guards against overlapping rolls and briefly
+   * drops messages mid-roll (rare, since a roll only happens once per segment).
+   */
+  async _rollover(id, s) {
+    s.rolling = true;
+    try {
+      const stream = this.streams.get(id);
+      if (stream) {
+        this.streams.delete(id);
+        await new Promise((resolve) => stream.end(resolve));
+      }
+      const cur = this.filePath(id);
+      const prev = `${cur}.1`;
+      if (fs.existsSync(cur)) {
+        fs.rmSync(prev, { force: true });
+        fs.renameSync(cur, prev);
+      }
+      s.bytes = 0; // a fresh current file is created on the next write
+    } catch (error) {
+      s.lastError = `roll-over failed: ${error.message}`;
+    } finally {
+      s.rolling = false;
+    }
+  }
+
   onMessage(msg) {
     const table = this.table();
     if (!table.length) return;
@@ -144,13 +174,16 @@ class Recorder {
       }
 
       // file target — buffered async append via the recording's WriteStream
-      if (s.full) continue;
       const cap = Number(rec.maxBytes) > 0 ? Number(rec.maxBytes) : DEFAULT_MAX_BYTES;
+      const segCap = Math.max(1, Math.floor(cap / 2));
       const line = JSON.stringify({ t: ts, topic: msg.topic, v: msg.payload, q: msg.qos }) + '\n';
-      if (s.bytes + line.length > cap) {
-        s.full = true;
-        s.lastError = 'file cap reached — recording stopped';
-        continue;
+      if (s.bytes + line.length > segCap) {
+        // Ring-buffer roll-over: rotate the full current segment to a ".1"
+        // previous segment and start a fresh one. Reads concatenate previous +
+        // current, so a long-running recording keeps recent data (bounded to
+        // ~cap total) instead of stopping forever when it hits the cap.
+        if (!s.rolling) this._rollover(rec.id, s);
+        continue; // this message is dropped during the brief, rare roll
       }
       this._stream(rec.id).write(line);
       s.bytes += line.length;
@@ -173,17 +206,22 @@ class Recorder {
     );
   }
 
-  /** Stream the parsed JSONL records of a recording (skips blank/corrupt lines). */
+  /**
+   * Stream the parsed JSONL records of a recording (skips blank/corrupt lines).
+   * Reads the previous segment (".1") first, then the current file, so a
+   * rolled-over recording still yields records oldest-to-newest.
+   */
   async *_records(id) {
-    const file = this.filePath(id);
-    if (!fs.existsSync(file)) return;
-    const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line) continue;
-      try {
-        yield JSON.parse(line);
-      } catch {
-        // skip corrupt line
+    for (const file of [`${this.filePath(id)}.1`, this.filePath(id)]) {
+      if (!fs.existsSync(file)) continue;
+      const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line) continue;
+        try {
+          yield JSON.parse(line);
+        } catch {
+          // skip corrupt line
+        }
       }
     }
   }
@@ -255,10 +293,13 @@ class Recorder {
       this.streams.delete(id);
     }
     this.status.delete(id);
-    try {
-      fs.unlinkSync(this.filePath(id));
-    } catch {
-      // no file — fine
+    // Remove the current file and the rolled-over previous segment (if any).
+    for (const file of [this.filePath(id), `${this.filePath(id)}.1`]) {
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        // no file — fine
+      }
     }
   }
 

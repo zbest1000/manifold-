@@ -272,7 +272,7 @@ function HostStatePanel({ brokers, hosts, onStatus }) {
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Primary host STATE</h3>
       <p className="mb-2 text-[11px] leading-snug text-slate-500">
         Publish retained <span className="font-mono">spBv1.0/STATE/&lt;host&gt;</span> so edge nodes see Manifold as a
-        Sparkplug host application (will announces offline).
+        Sparkplug host application (with a Last Will that announces offline).
       </p>
       <div className="space-y-1.5">
         <select

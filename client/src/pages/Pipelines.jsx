@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Workflow, Boxes, Database, CircleDot, FileCheck2, Trash2, Plus, Play, Square,
   Eye, RefreshCw, AlertTriangle, CheckCircle2, Power, Pencil
@@ -392,6 +392,59 @@ function RoutesTab({ brokers }) {
   );
 }
 
+// A field whose model value is a structured object/array (JSON, a rename map, a
+// field list) but whose editing surface is text. It buffers the raw text so a
+// half-typed value ({"site": ) isn't parsed, rejected, and reverted on every
+// keystroke — which jumped the cursor and made these fields nearly unusable.
+// Commits live when the text parses; on blur it reformats, or reverts if the
+// text is invalid. The buffer never resyncs from props while the field is
+// focused, so your keystrokes are never overwritten mid-edit.
+function StructuredInput({ value, format, parse, onCommit, ...props }) {
+  const [text, setText] = useState(() => format(value));
+  const [invalid, setInvalid] = useState(false);
+  const editingRef = useRef(false);
+  useEffect(() => {
+    if (!editingRef.current) setText(format(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return (
+    <input
+      {...props}
+      value={text}
+      onFocus={() => {
+        editingRef.current = true;
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setText(raw);
+        const res = parse(raw);
+        if (res.ok) {
+          setInvalid(false);
+          onCommit(res.value);
+        } else {
+          setInvalid(true);
+        }
+      }}
+      onBlur={() => {
+        editingRef.current = false;
+        const res = parse(text);
+        if (res.ok) {
+          setInvalid(false);
+          onCommit(res.value);
+          setText(format(res.value));
+        } else {
+          setInvalid(false);
+          setText(format(value)); // discard the unparseable draft, restore last good
+        }
+      }}
+      className={clsx(
+        'rounded-lg border bg-surface-950/60 px-2 py-1 font-mono text-[11px] text-slate-200 placeholder:text-slate-600 focus:outline-none',
+        invalid ? 'border-rose-500/60' : 'border-white/10'
+      )}
+    />
+  );
+}
+
 function TransformRow({ t, onChange, onRemove }) {
   const input = (props) => (
     <input
@@ -403,9 +456,42 @@ function TransformRow({ t, onChange, onRemove }) {
     <div className="flex flex-wrap items-center gap-2 rounded-lg bg-black/20 px-2 py-1.5 text-xs">
       <span className="rounded bg-accent-500/15 px-1.5 py-0.5 font-mono text-[10px] text-accent-300">{t.type}</span>
       {t.type === 'repath' && input({ value: t.to, style: { width: 260 }, placeholder: 'uns/{1}/{3-}  ({n}=segment, {n-}=tail, {topic})', onChange: (e) => onChange({ ...t, to: e.target.value }) })}
-      {t.type === 'pick' && input({ value: (t.fields || []).join(','), style: { width: 220 }, placeholder: 'field1,field2', onChange: (e) => onChange({ ...t, fields: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) }) })}
-      {t.type === 'rename' && input({ value: Object.entries(t.map || {}).map(([a, b]) => `${a}:${b}`).join(','), style: { width: 220 }, placeholder: 'old:new,old2:new2', onChange: (e) => onChange({ ...t, map: Object.fromEntries(e.target.value.split(',').map((p) => p.split(':').map((s) => s.trim())).filter((p) => p.length === 2 && p[0])) }) })}
-      {t.type === 'set' && input({ value: JSON.stringify(t.values || {}), style: { width: 220 }, placeholder: '{"site":"emmeloord"}', onChange: (e) => { try { onChange({ ...t, values: JSON.parse(e.target.value || '{}') }); } catch { /* keep typing */ } } })}
+      {t.type === 'pick' && (
+        <StructuredInput
+          value={t.fields || []}
+          format={(a) => (a || []).join(',')}
+          parse={(s) => ({ ok: true, value: s.split(',').map((x) => x.trim()).filter(Boolean) })}
+          onCommit={(fields) => onChange({ ...t, fields })}
+          style={{ width: 220 }}
+          placeholder="field1,field2"
+        />
+      )}
+      {t.type === 'rename' && (
+        <StructuredInput
+          value={t.map || {}}
+          format={(m) => Object.entries(m || {}).map(([a, b]) => `${a}:${b}`).join(',')}
+          parse={(s) => ({ ok: true, value: Object.fromEntries(s.split(',').map((p) => p.split(':').map((x) => x.trim())).filter((p) => p.length === 2 && p[0])) })}
+          onCommit={(map) => onChange({ ...t, map })}
+          style={{ width: 220 }}
+          placeholder="old:new,old2:new2"
+        />
+      )}
+      {t.type === 'set' && (
+        <StructuredInput
+          value={t.values || {}}
+          format={(v) => JSON.stringify(v || {})}
+          parse={(s) => {
+            try {
+              return { ok: true, value: JSON.parse(s.trim() || '{}') };
+            } catch {
+              return { ok: false };
+            }
+          }}
+          onCommit={(values) => onChange({ ...t, values })}
+          style={{ width: 220 }}
+          placeholder='{"site":"emmeloord"}'
+        />
+      )}
       {t.type === 'scale' && (
         <>
           {input({ value: t.field || '', style: { width: 90 }, placeholder: 'field (opt)', onChange: (e) => onChange({ ...t, field: e.target.value }) })}

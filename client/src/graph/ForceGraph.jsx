@@ -40,7 +40,8 @@ const ForceGraph = forwardRef(function ForceGraph(
     matchIds = null,
     focusId = null,
     minimap = false,
-    colorByProtocol = false
+    colorByProtocol = false,
+    beautify = false
   },
   ref
 ) {
@@ -174,10 +175,16 @@ const ForceGraph = forwardRef(function ForceGraph(
     // links entirely when zoomed far out (nodes convey structure).
     const drawLinks = !big || t.k >= 0.3;
     if (drawLinks) {
-      ctx.lineWidth = style.link.width / t.k;
-      ctx.strokeStyle = style.link.color;
+      // Beautify: brighter, slightly thicker links (with a glow when not heavy)
+      // so the topology reads as a lit constellation rather than grey threads.
+      ctx.lineWidth = (beautify ? style.link.width * 1.5 : style.link.width) / t.k;
+      ctx.strokeStyle = beautify ? style.linkHighlight || style.link.color : style.link.color;
+      if (beautify && !heavy) {
+        ctx.shadowColor = style.linkHighlight || style.link.color;
+        ctx.shadowBlur = 6;
+      }
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = beautify ? 0.85 : 1;
       ctx.beginPath();
       const special = [];
       for (const l of links) {
@@ -201,6 +208,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
     }
 
     const showLabels = t.k >= style.showLabelsAtZoom;
@@ -228,7 +236,11 @@ const ForceGraph = forwardRef(function ForceGraph(
       ctx.globalAlpha = alpha;
 
       let glow = 0;
-      if (!heavy) glow = (style.node.glow || 0) + Math.min(rate, 4) * 6;
+      if (!heavy) {
+        glow = (style.node.glow || 0) + Math.min(rate, 4) * 6;
+        // Beautify: a persistent bloom halo around every node, brighter on hubs.
+        if (beautify) glow = Math.max(glow, 8 + Math.min(r, 14) * 0.7);
+      }
       if (glow > 0) {
         ctx.shadowColor = color;
         ctx.shadowBlur = glow;
@@ -336,7 +348,7 @@ const ForceGraph = forwardRef(function ForceGraph(
     ctx.restore();
 
     if (minimap) drawMinimap(ctx, nodes, transformRef.current, sizeRef.current, style, colorFor);
-  }, [style, selectedId, activitySize, nodeValues, valueZoom, matchIds, focusId, minimap, colorFor]);
+  }, [style, selectedId, activitySize, nodeValues, valueZoom, matchIds, focusId, minimap, colorFor, beautify]);
 
   useEffect(() => {
     drawRef.current = draw;
@@ -555,10 +567,24 @@ const ForceGraph = forwardRef(function ForceGraph(
     const minY = Math.min(...ys);
     const maxY = Math.max(...ys);
     const pad = 90;
-    const k = Math.min((w - pad) / Math.max(maxX - minX, 1), (h - pad) / Math.max(maxY - minY, 1), 2.5);
     const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const t = zoomIdentity.translate(w / 2 - k * cx, h / 2 - k * cy).scale(k);
+    let k;
+    let tx;
+    let ty;
+    if (layoutModeRef.current === 'tree') {
+      // The indented tree grows top-to-bottom: fit to WIDTH at a readable zoom
+      // and anchor the root near the top (scroll down for the rest) when the
+      // tree is taller than the viewport; centre it vertically when it's short.
+      k = Math.min((w - pad) / Math.max(maxX - minX, 1), 1.5);
+      const treeH = (maxY - minY) * k;
+      tx = w / 2 - k * cx;
+      ty = treeH > h - pad ? pad / 2 - k * minY : h / 2 - k * ((minY + maxY) / 2);
+    } else {
+      k = Math.min((w - pad) / Math.max(maxX - minX, 1), (h - pad) / Math.max(maxY - minY, 1), 2.5);
+      tx = w / 2 - k * cx;
+      ty = h / 2 - k * ((minY + maxY) / 2);
+    }
+    const t = zoomIdentity.translate(tx, ty).scale(k);
     if (selRef.current && zoomRef.current) selRef.current.call(zoomRef.current.transform, t);
     transformRef.current = t;
     draw();
@@ -640,6 +666,11 @@ const ForceGraph = forwardRef(function ForceGraph(
       return null;
     };
 
+    // Press position (client px) for the current drag, so 'end' can tell a click
+    // from a real drag. d3-drag owns the pointer once a node is the subject, so
+    // the window pointerup below never sees a node click — selection has to
+    // happen here instead.
+    let dragStartClient = null;
     const dragBehavior = drag()
       .container(canvas)
       .subject((event) => {
@@ -649,6 +680,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       })
       .on('start', (event) => {
         if (!event.subject) return;
+        dragStartClient = { x: event.sourceEvent.clientX, y: event.sourceEvent.clientY };
         if (simRef.current) simRef.current.alphaTarget(0.25).restart();
         event.subject.fx = event.subject.x;
         event.subject.fy = event.subject.y;
@@ -663,6 +695,15 @@ const ForceGraph = forwardRef(function ForceGraph(
       .on('end', (event) => {
         if (!event.subject) return;
         if (simRef.current) simRef.current.alphaTarget(0);
+        // A press that barely moved is a click, not a drag: select the node
+        // (opens the properties panel). Without this, clicking a node in any
+        // graph under the big-mode threshold never selected it, because d3-drag
+        // captured the gesture and the window pointerup never fired onUp.
+        const up = event.sourceEvent;
+        const moved =
+          dragStartClient && up ? Math.hypot(up.clientX - dragStartClient.x, up.clientY - dragStartClient.y) : Infinity;
+        dragStartClient = null;
+        if (moved <= 5) cbRef.current.onSelect?.(event.subject);
         // Keep nodes pinned in tree mode; release them in free-form layouts.
         if (layoutModeRef.current !== 'tree') {
           event.subject.fx = null;
@@ -709,18 +750,23 @@ const ForceGraph = forwardRef(function ForceGraph(
       }
     };
 
+    // pointerdown stays on the canvas (so downPos is only set for presses that
+    // begin on the graph). pointerup/pointermove go on WINDOW: d3-zoom and
+    // d3-drag are bound to this same canvas and preempt canvas-level pointerup,
+    // so a plain left-click's onUp never fired and selection silently failed.
+    // The 3D renderer already uses window listeners for exactly this reason.
     canvas.addEventListener('pointerdown', onDown);
-    canvas.addEventListener('pointerup', onUp);
+    window.addEventListener('pointerup', onUp);
     canvas.addEventListener('dblclick', onDblClick);
-    canvas.addEventListener('pointermove', onMove);
+    window.addEventListener('pointermove', onMove);
     canvas.addEventListener('contextmenu', onContext);
 
     return () => {
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onDown);
-      canvas.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('dblclick', onDblClick);
-      canvas.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('contextmenu', onContext);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -904,6 +950,11 @@ function computeDepths(nodes, links) {
   return depth;
 }
 
+// Indented tree that grows top-to-bottom: every node gets its own row (DFS
+// order, one below the last), and depth is shown by horizontal indent — like a
+// file explorer. This keeps a large hierarchy a tall, scrollable column with no
+// overlapping labels, instead of a tidy tree that fans out into a wide, flat
+// horizontal line at the leaves.
 function treePositions(nodes, links, layout) {
   // d3's forceLink mutates link.source/target from id strings to node objects
   // once the simulation is set up. This runs afterward, so resolve either shape.
@@ -917,31 +968,23 @@ function treePositions(nodes, links, layout) {
     childrenOf.get(s).push(t);
     hasParent.add(t);
   }
-  const rowGap = layout.rowGap || 90;
-  const colGap = layout.colGap || 46;
+  const rowGap = layout.rowGap || 34; // vertical step: one row per node
+  const indent = layout.colGap || 46; // horizontal step: per depth level
   const pos = new Map();
-  let order = 0;
   const seen = new Set();
+  let row = 0;
 
   const visit = (id, depth) => {
-    if (seen.has(id)) return order * colGap;
+    if (seen.has(id)) return;
     seen.add(id);
-    const kids = (childrenOf.get(id) || []).filter((k) => !seen.has(k));
-    if (kids.length === 0) {
-      const x = order * colGap;
-      order++;
-      pos.set(id, { x, y: depth * rowGap });
-      return x;
-    }
-    const xs = kids.map((k) => visit(k, depth + 1));
-    const x = (Math.min(...xs) + Math.max(...xs)) / 2;
-    pos.set(id, { x, y: depth * rowGap });
-    return x;
+    pos.set(id, { x: depth * indent, y: row * rowGap });
+    row++;
+    for (const c of childrenOf.get(id) || []) visit(c, depth + 1);
   };
 
   const roots = nodes.filter((n) => !hasParent.has(n.id));
   for (const r of roots) visit(r.id, 0);
-  for (const n of nodes) if (!pos.has(n.id)) visit(n.id, 0); // stragglers
+  for (const n of nodes) if (!pos.has(n.id)) visit(n.id, 0); // stragglers (cycles)
 
   const xsAll = [...pos.values()].map((p) => p.x);
   const ysAll = [...pos.values()].map((p) => p.y);

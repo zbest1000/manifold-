@@ -668,17 +668,39 @@ test('recorder.series returns downsampled numeric series and drops non-numeric',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('recorder stops at the file cap and reports full', () => {
+test('recorder rolls over at the file cap instead of stopping', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manifold-rec-'));
   const m = new MqttManager({ emit() {} });
-  const rec = { id: 'tiny', brokerId: 'b1', filter: '#', enabled: true, target: { type: 'file' }, maxBytes: 80 };
+  const rec = { id: 'tiny', brokerId: 'b1', filter: '#', enabled: true, target: { type: 'file' }, maxBytes: 200 };
   const r = new Recorder({ mqttManager: m, profiles: fakeProfiles({ recordings: { tiny: rec } }), dir });
   r.start();
-  for (let i = 0; i < 10; i++) m.emit('message', msg('b1', 'a/b', { i, pad: 'xxxxxxxxxx' }));
+  // Feed well past the cap; await between messages so each async roll settles.
+  for (let i = 0; i < 30; i++) {
+    m.emit('message', msg('b1', 'a/b', i));
+    await sleep(5);
+  }
+  await sleep(50);
+
   const s = r.getStatus('tiny');
-  assert.ok(s.full);
-  assert.ok(s.bytes <= 80);
-  assert.match(s.lastError, /cap reached/);
+  assert.ok(!s.full, 'recording keeps going — never reports "full"');
+
+  // Bounded to ~cap: the current segment plus one previous (".1") segment.
+  const size = ['', '.1'].reduce((n, ext) => {
+    try {
+      return n + fs.statSync(r.filePath('tiny') + ext).size;
+    } catch {
+      return n;
+    }
+  }, 0);
+  assert.ok(size > 0 && size <= 260, `on-disk size stays bounded, got ${size}`);
+
+  // A ring buffer keeps the NEWEST data and drops the oldest.
+  const { series } = await r.series('tiny', { tags: ['a/b'], from: 0, to: Infinity, maxPoints: 1000 });
+  const vals = (series[0]?.points || []).map(([, v]) => v);
+  assert.ok(vals.length > 0, 'has recent points');
+  assert.ok(Math.max(...vals) >= 20, `keeps the newest messages (max=${Math.max(...vals)})`);
+  assert.ok(Math.min(...vals) >= 5, `dropped the oldest messages (min=${Math.min(...vals)})`);
+
   r.stop();
   m.shutdown();
   fs.rmSync(dir, { recursive: true, force: true });

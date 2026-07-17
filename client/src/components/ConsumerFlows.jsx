@@ -223,7 +223,7 @@ export default function ConsumerFlows({ broker }) {
             styleId={graphStyle}
             layoutId="organic"
             selectedId={selected}
-            onSelect={setSelected}
+            onSelect={(n) => setSelected(n.id)}
             onExpand={expand}
           />
         ) : (
