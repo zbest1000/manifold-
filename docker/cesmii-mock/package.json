@@ -1,0 +1,10 @@
+{
+  "name": "manifold-cesmii-mock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal mock CESMII SMIP GraphQL server for local Manifold testing",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

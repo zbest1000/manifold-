@@ -51,6 +51,36 @@ services:
       mqtt:
         condition: service_healthy
 
+  # Mock CESMII i3X server. Connect from the app at http://i3x:8080 (i3X page or
+  # Discovery, which probes port 8080). Serves a small ISA-95 object hierarchy.
+  i3x:
+    build:
+      context: ./docker/i3x-mock
+    container_name: manifold-i3x
+    hostname: i3x
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    ports:
+      # Host loopback so you can `curl http://localhost:18080/info` directly. The
+      # app reaches it in-cluster as http://i3x:8080 regardless of this mapping.
+      - "127.0.0.1:18080:8080"
+
+  # Mock CESMII SMIP GraphQL server. Connect from the CESMII SMIP page with
+  # endpoint http://cesmii-mock:4000/graphql (any credentials are accepted).
+  cesmii-mock:
+    build:
+      context: ./docker/cesmii-mock
+    container_name: manifold-cesmii-mock
+    hostname: cesmii-mock
+    restart: unless-stopped
+    environment:
+      PORT: "4000"
+    ports:
+      # Host loopback so you can `curl http://localhost:14000/graphql` directly.
+      # The app reaches it in-cluster as http://cesmii-mock:4000 regardless.
+      - "127.0.0.1:14000:4000"
+
   app:
     build:
       context: .
