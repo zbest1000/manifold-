@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
+const { Agent } = require('undici');
 
 const MqttManager = require('../services/mqttManager');
 const historians = require('../services/historians');
@@ -183,10 +184,17 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
   // Unlike the other services, Timebase is probed at runtime: local
   // INTEGRATION=1 runs without the timebase/historian container must still
   // pass, so an unreachable API skips instead of failing.
-  const alive = await fetch(`${TIMEBASE_URL}/api/datasets`, { signal: AbortSignal.timeout(3000) })
+  // Timebase 1.3.4 enables ASP.NET HTTPS redirection with a self-signed dev
+  // cert, so http://host:4511 307-redirects to https://host:4512. Both the
+  // probe and the raw read-back below must accept that cert; the adapter itself
+  // does so via the sslInsecure flag on `conn`.
+  const insecure = new Agent({ connect: { rejectUnauthorized: false } });
+  const tbFetch = (u, o = {}) => fetch(u, { ...o, dispatcher: insecure });
+  const alive = await tbFetch(`${TIMEBASE_URL}/api/datasets`, { signal: AbortSignal.timeout(3000) })
     .then((r) => r.ok)
     .catch(() => false);
   if (!alive) {
+    await insecure.close();
     t.skip(`timebase not reachable at ${TIMEBASE_URL}`);
     return;
   }
@@ -196,7 +204,7 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
   const dataset = `ci-run-${Date.now()}`;
   const tag = `ci/run/${Date.now()}`;
   const base = Date.now() - 2000;
-  const conn = { type: 'timebase', url: TIMEBASE_URL, dataset };
+  const conn = { type: 'timebase', url: TIMEBASE_URL, dataset, sslInsecure: true };
 
   const out = await historians.writePoints(conn, [
     { tag, ts: base, value: 41, quality: 192 },
@@ -211,7 +219,7 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
   // Response shape: { s, e, tl: [{ t: { n, t }, d: [{ t, v, q }] }] }.
   const readUrl = `${TIMEBASE_URL}/api/datasets/${encodeURIComponent(dataset)}/data?tagname=${tag}&relativeStart=-1h`;
   const found = await until(async () => {
-    const res = await fetch(readUrl);
+    const res = await tbFetch(readUrl);
     if (!res.ok) return false;
     const data = await res.json().catch(() => null);
     const series = (data?.tl || []).find((s) => s?.t?.n === tag);
@@ -226,11 +234,14 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
   // an in-window query must return both values, and a window that ends
   // BEFORE the writes must return nothing (if the server ignored unknown
   // range params it would fall back to latest-point and this would leak).
+  // maxPoints must keep the two writes (1 s apart) in SEPARATE downsample
+  // buckets: bucketMs = ceil(window / maxPoints), so 120 s / 2000 = 60 ms ≪ 1 s.
+  // (A coarse 100 would merge them into one 1.2 s bucket averaged to 41.5.)
   const inWindow = await historians.querySeries(conn, {
     tags: [tag],
     start: base - 60_000,
     end: base + 60_000,
-    maxPoints: 100
+    maxPoints: 2000
   });
   const values = inWindow.series[0].points.map((p) => p[1]);
   assert.ok(values.includes(41) && values.includes(42), `querySeries must return both TVQs, got ${JSON.stringify(values)}`);
@@ -242,4 +253,7 @@ test('Timebase: TVQ writes hit the real REST API and read back from the dataset'
     maxPoints: 100
   });
   assert.strictEqual(beforeWrites.series[0].points.length, 0, 'a window before the writes must be empty');
+
+  await insecure.close();
+  await historians.closePools();
 });

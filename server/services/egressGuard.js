@@ -18,10 +18,12 @@ const { fetchWithTimeout } = require('./httpTimeout');
  *    169.254.169.254), IPv6 link-local, unspecified, multicast, and reserved /
  *    carrier-grade-NAT space.
  *
- *  - Blocked BY DEFAULT, allowed with MANIFOLD_ALLOW_PRIVATE_TARGETS=1 — RFC1918
- *    and IPv6 ULA. This is an OT tool whose legitimate job is often talking to
- *    LAN devices, so an operator on a plant network opts in explicitly; an
- *    internet-exposed instance stays safe out of the box.
+ *  - Blocked BY DEFAULT (fail-closed), allowed with MANIFOLD_ALLOW_PRIVATE_TARGETS=1
+ *    — RFC1918 and IPv6 ULA. This is the SSRF-sensitive tier: an internet-exposed
+ *    instance must not become a pivot into a LAN. On-prem/LAN deployments, where
+ *    Discovery scanning the plant subnet and reaching on-prem i3X/CESMII is the
+ *    point, opt in explicitly (the Docker demo sets it, since it is a local-only
+ *    demo). The server logs a loud startup warning whenever this opt-in is on.
  *
  * Hostnames are resolved and every returned address is checked before the
  * connection is made. This stops literal-IP SSRF and hostname-points-inward
@@ -31,6 +33,9 @@ const { fetchWithTimeout } = require('./httpTimeout');
  * residual risk rather than silently implied.
  */
 
+// Fail-closed: private/RFC1918/ULA targets are blocked unless the operator
+// explicitly opts in. Loopback, cloud metadata, multicast and reserved ranges
+// are ALWAYS blocked regardless of this flag.
 const ALLOW_PRIVATE = process.env.MANIFOLD_ALLOW_PRIVATE_TARGETS === '1';
 
 function ipv4ToInt(ip) {
@@ -111,7 +116,7 @@ class EgressBlockedError extends Error {
     super(
       `Egress to ${target} blocked: ${reason}.` +
         (reason === 'private/internal address'
-          ? ' Set MANIFOLD_ALLOW_PRIVATE_TARGETS=1 to allow RFC1918/LAN targets.'
+          ? ' Set MANIFOLD_ALLOW_PRIVATE_TARGETS=1 to allow RFC1918/LAN targets (safe only on a trusted network).'
           : '')
     );
     this.name = 'EgressBlockedError';

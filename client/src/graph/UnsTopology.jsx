@@ -137,7 +137,7 @@ export function buildUnsTree(broker, topics) {
   return root;
 }
 
-export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId = null, onSelect }) {
+export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId = null, onSelect, focusTarget = null }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -146,7 +146,15 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
   // Manual drag offsets on top of the computed layout, keyed `${brokerId}:${path}`.
   // They survive expand/collapse relayouts; "Auto arrange" clears them.
   const manualRef = useRef(new Map());
-  const fittedRef = useRef(false);
+  // Set once the user takes control of the camera (pan / zoom / drag / toggle).
+  // Until then the view auto-frames the whole forest as it loads and grows.
+  const userMovedRef = useRef(false);
+  // Multi-select: node keys (`${brokerId}:${path}`) the user has box- or
+  // ctrl-selected. Dragging any one moves the whole group. Kept in a ref (the
+  // draw loop reads it every frame); selCount mirrors its size for the hint.
+  const selRef = useRef(new Set());
+  const boxRef = useRef(null); // active rubber-band box, world coords {x1,y1,x2,y2}
+  const [selCount, setSelCount] = useState(0);
   const rafRef = useRef(0);
   const interactAt = useRef(0); // last pan/zoom/hover — keeps interaction at full fps
   const selectedRef = useRef(selectedId);
@@ -188,24 +196,69 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     fitAll();
   }, [fitAll]);
 
-  // Expanded paths per broker. Default: namespace + first level open.
+  // Center the viewport on one laid node at a readable zoom — the target of a
+  // "jump to this node" from the lint / events panels.
+  const centerOn = useCallback(
+    (l) => {
+      const { w, h } = sizeRef.current;
+      if (!w) return;
+      const p = posOf(l);
+      const t = transformRef.current;
+      t.k = Math.min(1.4, Math.max(t.k, 0.8)); // never focus while zoomed way out
+      t.x = w / 2 - t.k * p.x;
+      t.y = h / 2 - t.k * p.y;
+    },
+    [posOf]
+  );
+  // A pending "focus this node" request, applied once the node is laid out.
+  const focusPendingRef = useRef(null);
+
+  // Expanded paths per broker. Default: namespace + first level open. Seeding is
+  // per-broker (not one-shot): a broker whose topics stream in AFTER first paint
+  // still gets auto-expanded, instead of loading collapsed while its siblings
+  // are open. User collapses of already-seeded brokers are preserved.
   const [expanded, setExpanded] = useState(() => new Set());
-  const [initialized, setInitialized] = useState(false);
+  const seededRef = useRef(new Set());
   useEffect(() => {
-    if (initialized || !roots.length) return;
-    const seed = new Set();
-    for (const r of roots) {
-      seed.add(`${r.brokerId}:`);
-      for (const child of r.children.values()) seed.add(`${child.brokerId}:${child.path}`);
-    }
-    setExpanded(seed);
-    setInitialized(true);
-  }, [roots, initialized]);
+    const fresh = roots.filter((r) => !seededRef.current.has(r.brokerId));
+    if (!fresh.length) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const r of fresh) {
+        seededRef.current.add(r.brokerId);
+        next.add(`${r.brokerId}:`);
+        for (const child of r.children.values()) next.add(`${child.brokerId}:${child.path}`);
+      }
+      return next;
+    });
+  }, [roots]);
 
   // Warm the icon set (lazy chunk) so badges upgrade from glyphs to icons.
   useEffect(() => {
     loadIcons();
   }, []);
+
+  // Focus request (from a lint finding / event click): open every ancestor so
+  // the node is on-screen, then queue a center-on that the layout effect applies
+  // once the node has a laid-out position.
+  useEffect(() => {
+    if (!focusTarget?.brokerId || focusTarget.path == null) return;
+    const { brokerId, path } = focusTarget;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.add(`${brokerId}:`);
+      const segs = String(path).split('/').filter(Boolean);
+      let acc = '';
+      // Open ancestors only — the node itself need not be expanded to be visible.
+      for (let i = 0; i < segs.length - 1; i++) {
+        acc = i === 0 ? segs[i] : `${acc}/${segs[i]}`;
+        next.add(`${brokerId}:${acc}`);
+      }
+      return next;
+    });
+    focusPendingRef.current = { brokerId, path: String(path) };
+    userMovedRef.current = true; // a deliberate jump — auto-fit must not override it
+  }, [focusTarget]);
 
   // Live activity: stamp every ancestor path of each incoming topic, count it
   // for per-branch rates, and record the leaf's value + inter-arrival EMA.
@@ -293,10 +346,24 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
 
   useEffect(() => {
     visibleRef.current = layout.nodes;
-    // First real layout: frame everything instead of starting at a fixed origin.
-    if (!fittedRef.current && layout.nodes.length > 0 && sizeRef.current.w > 0) {
+    // Auto-frame the whole forest on load AND as it grows — brokers connect,
+    // topics stream in, async mount roots arrive — until the user takes control
+    // of the camera. A one-shot fit locks onto the first partial forest and
+    // leaves all later growth off-center (the reported "doesn't center on
+    // load"); re-fitting until interaction keeps it centered without ever
+    // fighting manual navigation.
+    if (!userMovedRef.current && layout.nodes.length > 0 && sizeRef.current.w > 0) {
       fitAll();
-      fittedRef.current = true;
+    }
+    // Apply a queued focus once its node has a position (it may take an extra
+    // layout pass for the just-expanded ancestors to lay the node out).
+    if (focusPendingRef.current) {
+      const { brokerId, path } = focusPendingRef.current;
+      const target = layout.nodes.find((l) => l.node.brokerId === brokerId && l.node.path === path);
+      if (target) {
+        centerOn(target);
+        focusPendingRef.current = null;
+      }
     }
     // Read-only hook for e2e tests / screenshot tooling: world coordinates of
     // the visible nodes (manual offsets applied) plus the current view transform.
@@ -311,7 +378,7 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
         })
       };
     }
-  }, [layout, fitAll, posOf]);
+  }, [layout, fitAll, posOf, centerOn]);
 
   // ---- Drawing ----
   const draw = useCallback(() => {
@@ -381,6 +448,17 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       const last = liveAt(n);
       const pulsing = now - last < PULSE_MS;
       const live = now - last < LIVE_WINDOW_MS;
+
+      // Multi-select highlight: an accent ring + soft halo on every group member.
+      if (selRef.current.has(`${n.brokerId}:${n.path}`)) {
+        ctx.beginPath();
+        ctx.arc(P.x, P.y, R + 6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(56,189,248,0.12)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(56,189,248,0.9)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
 
       if (pulsing) {
         const p = 1 - (now - last) / PULSE_MS;
@@ -487,6 +565,22 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       }
     }
 
+    // Rubber-band selection box (drawn in world space; hairline at any zoom).
+    if (boxRef.current) {
+      const b = boxRef.current;
+      const x = Math.min(b.x1, b.x2);
+      const y = Math.min(b.y1, b.y2);
+      const bw = Math.abs(b.x2 - b.x1);
+      const bh = Math.abs(b.y2 - b.y1);
+      ctx.fillStyle = 'rgba(56,189,248,0.08)';
+      ctx.fillRect(x, y, bw, bh);
+      ctx.strokeStyle = 'rgba(56,189,248,0.6)';
+      ctx.lineWidth = 1 / t.k;
+      ctx.setLineDash([4 / t.k, 3 / t.k]);
+      ctx.strokeRect(x, y, bw, bh);
+      ctx.setLineDash([]);
+    }
+
     ctx.restore();
   }, [layout, levels, posOf]);
 
@@ -551,16 +645,39 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     // Drag on a node moves THAT node (manual rearrangement); drag on empty
     // canvas pans the view. Click = select, click on ± (or double-click) =
     // expand/collapse. "Auto arrange" clears all manual moves.
-    let mode = null; // 'pan' | 'node'
+    let mode = null; // 'pan' | 'node' | 'box'
     let grabbed = null; // laid node being moved
     let moved = 0;
     let last = { x: 0, y: 0 };
+    let ctrlToggled = false; // a ctrl/⌘-click that toggled selection — onUp skips select
+    const keyOf = (l) => `${l.node.brokerId}:${l.node.path}`;
     const onDown = (e) => {
       interactAt.current = Date.now();
       moved = 0;
+      ctrlToggled = false;
       last = { x: e.clientX, y: e.clientY };
       grabbed = pick(toWorld(e));
-      mode = grabbed ? 'node' : 'pan';
+      if (grabbed && (e.ctrlKey || e.metaKey)) {
+        // Ctrl/⌘-click toggles this node in the multi-selection (no move).
+        const key = keyOf(grabbed);
+        if (selRef.current.has(key)) selRef.current.delete(key);
+        else selRef.current.add(key);
+        setSelCount(selRef.current.size);
+        ctrlToggled = true;
+        grabbed = null;
+        mode = null;
+        return;
+      }
+      if (grabbed) {
+        mode = 'node';
+      } else if (e.shiftKey) {
+        // Shift-drag on empty canvas draws a rubber-band selection box.
+        const p = toWorld(e);
+        boxRef.current = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+        mode = 'box';
+      } else {
+        mode = 'pan';
+      }
     };
     const onMove = (e) => {
       interactAt.current = Date.now();
@@ -574,14 +691,24 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       const dy = e.clientY - last.y;
       moved += Math.abs(dx) + Math.abs(dy);
       last = { x: e.clientX, y: e.clientY };
+      userMovedRef.current = true; // panning or dragging = user owns the camera now
       if (mode === 'pan') {
         transformRef.current.x += dx;
         transformRef.current.y += dy;
+      } else if (mode === 'box' && boxRef.current) {
+        const p = toWorld(e);
+        boxRef.current.x2 = p.x;
+        boxRef.current.y2 = p.y;
       } else if (grabbed) {
         const k = transformRef.current.k;
-        const key = `${grabbed.node.brokerId}:${grabbed.node.path}`;
-        const off = manualRef.current.get(key) || { dx: 0, dy: 0 };
-        manualRef.current.set(key, { dx: off.dx + dx / k, dy: off.dy + dy / k });
+        const gkey = keyOf(grabbed);
+        // Grabbing a node that's part of the selection drags the WHOLE group;
+        // otherwise just this node.
+        const keys = selRef.current.has(gkey) && selRef.current.size > 1 ? [...selRef.current] : [gkey];
+        for (const key of keys) {
+          const off = manualRef.current.get(key) || { dx: 0, dy: 0 };
+          manualRef.current.set(key, { dx: off.dx + dx / k, dy: off.dy + dy / k });
+        }
         canvas.style.cursor = 'grabbing';
       }
     };
@@ -589,10 +716,38 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     const onUp = (e) => {
       const wasDrag = moved >= 6;
       const hit = grabbed;
+      const wasBox = mode === 'box';
+      const box = boxRef.current;
       mode = null;
       grabbed = null;
+      boxRef.current = null;
       canvas.style.cursor = 'default';
-      if (wasDrag || !hit) return;
+      if (ctrlToggled) return; // selection already toggled on pointerdown
+      if (wasBox) {
+        // Finalize the rubber-band: every node whose center is inside joins the
+        // selection (shift keeps the existing selection, else it replaces it).
+        const minX = Math.min(box.x1, box.x2);
+        const maxX = Math.max(box.x1, box.x2);
+        const minY = Math.min(box.y1, box.y2);
+        const maxY = Math.max(box.y1, box.y2);
+        const next = new Set(e.shiftKey ? selRef.current : []);
+        for (const l of visibleRef.current) {
+          const P = posOf(l);
+          if (P.x >= minX && P.x <= maxX && P.y >= minY && P.y <= maxY) next.add(keyOf(l));
+        }
+        selRef.current = next;
+        setSelCount(next.size);
+        return;
+      }
+      if (wasDrag) return;
+      if (!hit) {
+        // Plain click on empty canvas clears the multi-selection.
+        if (selRef.current.size) {
+          selRef.current = new Set();
+          setSelCount(0);
+        }
+        return;
+      }
       // Click near the +/- affordance (below the badge) toggles expansion.
       const p = toWorld(e);
       const P = posOf(hit);
@@ -601,6 +756,9 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
         toggle(hit.node);
         return;
       }
+      // Plain click on a node makes it the sole selection and opens its detail.
+      selRef.current = new Set([keyOf(hit)]);
+      setSelCount(1);
       // Defer selection briefly so a double-click (expand) doesn't also select —
       // opening the detail panel mid-gesture would move the canvas under the
       // second click.
@@ -614,6 +772,7 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     };
     const onWheel = (e) => {
       interactAt.current = Date.now();
+      userMovedRef.current = true; // zooming = user owns the camera now
       e.preventDefault();
       const t = transformRef.current;
       const rect = canvas.getBoundingClientRect();
@@ -626,11 +785,20 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       t.k = nk;
     };
 
+    const onKey = (e) => {
+      if (e.key === 'Escape' && selRef.current.size) {
+        selRef.current = new Set();
+        setSelCount(0);
+        interactAt.current = Date.now(); // prompt a redraw so the rings clear now
+      }
+    };
+
     canvas.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     canvas.addEventListener('dblclick', onDbl);
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onKey);
     return () => {
       clearTimeout(pendingSelect);
       ro.disconnect();
@@ -639,11 +807,13 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('dblclick', onDbl);
       canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKey);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onSelect, posOf]);
 
   const toggle = (node) => {
+    userMovedRef.current = true; // user is exploring — stop re-framing the camera under them
     const key = `${node.brokerId}:${node.path}`;
     // Collapsing also collapses everything beneath, so re-expanding is tidy.
     const descendantPrefix = node.path === '' ? `${node.brokerId}:` : `${node.brokerId}:${node.path}/`;
@@ -665,6 +835,18 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     <div ref={wrapRef} className="relative h-full w-full overflow-hidden">
       <canvas ref={canvasRef} className="h-full w-full" />
       <div className="absolute bottom-4 right-4 z-10 flex items-center gap-2">
+        {selCount > 0 && (
+          <button
+            onClick={() => {
+              selRef.current = new Set();
+              setSelCount(0);
+            }}
+            title="Clear the multi-selection (Esc)"
+            className="flex items-center gap-1.5 rounded-lg border border-sky-400/50 bg-sky-500/15 px-3 py-1.5 text-[11px] font-medium text-sky-700 shadow-sm backdrop-blur transition hover:bg-sky-500/25"
+          >
+            {selCount} selected · drag to move · Esc ✕
+          </button>
+        )}
         <button
           onClick={autoArrange}
           title="Reset manual node positions to the tidy layout and fit to view"

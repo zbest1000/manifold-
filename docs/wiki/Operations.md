@@ -84,9 +84,11 @@ the outbound HTTP clients (i3X, CESMII, broker admin APIs) — pass every target
 through one egress guard. Loopback, link-local (including the cloud-metadata
 address `169.254.169.254`), multicast, and reserved ranges are **always**
 blocked, so Manifold can't be turned into an SSRF pivot or an internal port
-scanner. RFC1918 / LAN targets — the normal case on a plant network — require
-`MANIFOLD_ALLOW_PRIVATE_TARGETS=1`, an explicit opt-in you set on a trusted
-network.
+scanner. RFC1918 / LAN targets — the normal case on a plant network, and what
+Discovery is *for* — are **fail-closed by default**; set
+`MANIFOLD_ALLOW_PRIVATE_TARGETS=1` on a trusted on-prem network to allow them
+(the server warns at startup when it's on). The Docker demo sets it, since it is
+a local-only demo.
 
 ### CORS
 

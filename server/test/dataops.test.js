@@ -106,6 +106,41 @@ test('timebase backend groups TVQs per tag into the dataset', async () => {
   assert.strictEqual(historians.timebaseWritePath('The Juice Factory'), '/api/datasets/The%20Juice%20Factory/data');
 });
 
+test('historian TLS: dispatcher is opt-in and cert failures get an actionable message', async () => {
+  const { Agent } = require('undici');
+  let seen;
+  const capture = async (url, opts) => {
+    seen = opts;
+    return { ok: true, status: 200, text: async () => '' };
+  };
+  const point = [{ tag: 'a/b', ts: 1, value: 1 }];
+
+  // No TLS flags → verification stays on (no dispatcher attached).
+  await historians.writePoints({ type: 'timebase', url: 'https://hist:4512', dataset: 'M' }, point, capture);
+  assert.ok(!('dispatcher' in seen), 'no dispatcher without sslInsecure/sslRootCert');
+
+  // sslInsecure → an undici Agent is attached to relax verification.
+  await historians.writePoints({ type: 'timebase', url: 'https://hist:4512', dataset: 'M', sslInsecure: true }, point, capture);
+  assert.ok(seen.dispatcher instanceof Agent, 'sslInsecure attaches an undici dispatcher');
+
+  // sslRootCert (without insecure) also attaches a dispatcher (pinned CA).
+  await historians.writePoints({ type: 'timebase', url: 'https://hist:4512', dataset: 'M', sslRootCert: '-----BEGIN CERTIFICATE-----' }, point, capture);
+  assert.ok(seen.dispatcher instanceof Agent, 'sslRootCert attaches an undici dispatcher');
+
+  // A rejected certificate (opaque "fetch failed") is rewritten into a fix-it hint.
+  const certFail = async () => {
+    const e = new Error('fetch failed');
+    e.cause = { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' };
+    throw e;
+  };
+  await assert.rejects(
+    () => historians.writePoints({ type: 'timebase', url: 'https://hist:4512', dataset: 'M' }, point, certFail),
+    /self-signed/i
+  );
+
+  await historians.closePools();
+});
+
 test('timescaledb backend creates schema once and batch-inserts parameterized rows', async () => {
   const queries = [];
   const fakePool = { query: async (text, values) => (queries.push({ text: text.replace(/\s+/g, ' ').trim(), values }), { rows: [] }) };

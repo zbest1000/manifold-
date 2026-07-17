@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
-import { Card, Button, Input, Field, Badge, EmptyState } from '@/components/ui';
+import { Card, Button, Input, Field, Badge, EmptyState, HelpButton } from '@/components/ui';
 import { formatDistanceToNow } from 'date-fns';
 
 /**
@@ -62,6 +62,36 @@ export default function Tags() {
         subtitle="browse device tags, bind them into the UNS"
         actions={
           <div className="flex items-center gap-2">
+            <HelpButton title="What are Tags, and where do they come from?">
+              <p>
+                A <b>tag</b> is a single named data point on a device — a sensor reading, a setpoint, a status. This page
+                browses the tags Manifold can already see across the drivers it speaks, so you can bind them into your
+                Unified Namespace.
+              </p>
+              <p>The <b>Source</b> dropdown picks where the tags come from:</p>
+              <ul className="list-disc space-y-1.5 pl-5">
+                <li>
+                  <b>OPC UA</b> — the address space of a connected OPC UA server (browse its folders/nodes). Connect one
+                  under <b>OPC UA</b> first.
+                </li>
+                <li>
+                  <b>Sparkplug</b> — the metrics of a device seen in a broker's Sparkplug B traffic (Group → Edge Node →
+                  Device → metric), learned from BIRTH certificates.
+                </li>
+                <li>
+                  <b>MQTT</b> — the plain topic tree observed on a broker, treated as tags.
+                </li>
+              </ul>
+              <p>
+                Tick the tags you want, then <b>Add to UNS</b> to create a <b>binding</b>: Manifold subscribes/monitors those
+                tags and republishes them into your namespace (as plain values, a TVQ envelope, or a Sparkplug B device),
+                with deadband and quality mapping. Bindings are <b>read-only toward devices</b> — nothing here writes back.
+              </p>
+              <p className="text-slate-400">
+                No sources listed? Connect a broker (MQTT/Sparkplug) or an OPC UA server first — tags are discovered from
+                live connections, not configured by hand.
+              </p>
+            </HelpButton>
             <select
               value={source ? `${source.type}:${source.id}` : ''}
               onChange={(e) => {
@@ -83,7 +113,7 @@ export default function Tags() {
                 <Upload size={14} className="mr-1" /> Import CSV
               </Button>
             )}
-            <Button onClick={() => setWizardOpen(true)} disabled={selection.size === 0 && source?.type !== 'sparkplug'}>
+            <Button onClick={() => setWizardOpen(true)} disabled={selection.size === 0}>
               <Plus size={14} className="mr-1" /> Add to UNS {selection.size > 0 && `(${selection.size})`}
             </Button>
           </div>
@@ -420,6 +450,11 @@ function BindWizard({ source, selection, brokers, editing = null, onClose, onDon
           ],
           target: { type: 'mqtt', brokerId: form.brokerId, retain: form.retain, qos: Number(form.qos) || 0 }
         });
+        // MQTT tags compile to a pipeline Route, not a Binding — say so, so it
+        // isn't a mystery when it doesn't appear under Tags.
+        toast.success('Created a pipeline route (see Pipelines → Routes)');
+        onDone();
+        return;
       } else {
         const body = {
           name: name || null,
@@ -519,8 +554,8 @@ function sparkplugSourceFromSelection(brokerId, selection) {
   // "group/edge/device/metric" — reconstruct one (group, edge, device) scope
   // and the metric list from the first selection's path.
   const entries = [...selection.entries()];
-  const first = entries[0];
-  const meta = first[1].meta || {};
+  if (entries.length === 0) throw new Error('Select at least one Sparkplug metric first');
+  const meta = entries[0][1].meta || {};
   // The browse API returns metric nodes with address = metric name and
   // meta.device set; the tree id carried the scope, so we ask the user's
   // selection context: all metrics share the source node's scope.

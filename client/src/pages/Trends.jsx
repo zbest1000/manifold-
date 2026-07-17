@@ -2,17 +2,56 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, X, Plus, Database, TrendingUp } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '@/lib/api';
+import { useStore } from '@/store/store';
 import PageHeader from '@/components/PageHeader';
 import TrendChart, { seriesColor } from '@/components/TrendChart';
 import { Card, Button, Input, Field, EmptyState } from '@/components/ui';
 
 /**
- * Trends — read-back for the historians pipelines and the recorder write into.
- * Pick a historian, add up to MAX_TAGS stored topics (searched from the
- * historian itself, or typed free-text), pick a window, get a chart.
+ * Trends — chart time-series from three sources: a historian, a local file
+ * recording, or LIVE from the in-memory message ring (no storage required).
+ * Add up to MAX_TAGS topics, pick a window, get a chart.
  */
 
 const MAX_TAGS = 10;
+
+// Pull a numeric value out of a message payload for charting. Handles a bare
+// number, a JSON object with a value-ish field, or a numeric string.
+function numericFrom(payload) {
+  if (typeof payload === 'number') return Number.isFinite(payload) ? payload : null;
+  if (typeof payload === 'string') {
+    const n = Number(payload);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (payload && typeof payload === 'object') {
+    for (const k of ['value', 'v', 'val', 'reading']) {
+      if (typeof payload[k] === 'number' && Number.isFinite(payload[k])) return payload[k];
+    }
+    const first = Object.values(payload).find((v) => typeof v === 'number' && Number.isFinite(v));
+    return first ?? null;
+  }
+  return null;
+}
+
+// Build historian-shaped series ({ series: [{ tag, points: [[tsMs, value]] }] })
+// from the live recent-message ring for each requested topic.
+async function liveSeries(brokerId, tags, from, to) {
+  const series = await Promise.all(
+    tags.map(async (tag) => {
+      try {
+        const r = await api.topicMessages(brokerId, tag, 500);
+        const points = (r.messages || [])
+          .map((m) => [new Date(m.timestamp).getTime(), numericFrom(m.payload)])
+          .filter(([ts, v]) => v != null && Number.isFinite(ts) && ts >= from && ts <= to)
+          .sort((a, b) => a[0] - b[0]);
+        return { tag, points };
+      } catch {
+        return { tag, points: [] };
+      }
+    })
+  );
+  return { series };
+}
 
 const RANGE_PRESETS = [
   { label: '15m', ms: 15 * 60_000 },
@@ -25,11 +64,14 @@ const RANGE_PRESETS = [
 const AUTO_REFRESH_MS = 30_000;
 
 export default function Trends() {
-  const [sourceType, setSourceType] = useState('historian'); // 'historian' | 'recording'
+  const connectedBrokers = useStore((s) => s.brokers).filter((b) => b.status === 'connected');
+  const topicVersion = useStore((s) => s.topicVersion);
+  const [sourceType, setSourceType] = useState('live'); // 'live' | 'historian' | 'recording'
   const [historians, setHistorians] = useState([]);
   const [recordings, setRecordings] = useState([]);
   const [histId, setHistId] = useState('');
   const [recId, setRecId] = useState('');
+  const [brokerId, setBrokerId] = useState('');
   const [tags, setTags] = useState([]);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -63,10 +105,32 @@ export default function Trends() {
       .catch(() => {});
   }, []);
 
+  // Default the live broker to the first connected one.
+  useEffect(() => {
+    if (connectedBrokers[0]) setBrokerId((prev) => prev || connectedBrokers[0].id);
+  }, [connectedBrokers]);
+
   const usingRecording = sourceType === 'recording';
+  const usingLive = sourceType === 'live';
   const selected = useMemo(() => historians.find((h) => h.id === histId) || null, [historians, histId]);
-  // Recordings and Timebase have no tag-listing API — the user types the topic path.
-  const searchable = !usingRecording && selected && selected.type !== 'timebase';
+  // Historians (except Timebase) offer a tag-listing search; the live source
+  // suggests from the broker's observed topics; recordings are typed by path.
+  const searchable = (sourceType === 'historian' && selected && selected.type !== 'timebase') || usingLive;
+
+  // Live topic suggestions from the broker's observed topic set, filtered by the
+  // query — so you can pick a topic to trend instead of typing it blind.
+  const liveSuggestions = useMemo(() => {
+    if (!usingLive || !brokerId) return [];
+    const q = query.trim().toLowerCase();
+    const topics = useStore
+      .getState()
+      .getTopics(brokerId)
+      .map((t) => t.topic || t)
+      .filter((t) => typeof t === 'string' && !t.startsWith('$SYS/'));
+    const filtered = q ? topics.filter((t) => t.toLowerCase().includes(q)) : topics;
+    return filtered.filter((t) => !tags.includes(t)).sort().slice(0, 40);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingLive, brokerId, query, tags, topicVersion]);
 
   // Debounced tag search against the historian itself.
   useEffect(() => {
@@ -98,7 +162,7 @@ export default function Trends() {
 
   const removeTag = (tag) => setTags((prev) => prev.filter((t) => t !== tag));
 
-  const sourceId = usingRecording ? recId : histId;
+  const sourceId = usingLive ? brokerId : usingRecording ? recId : histId;
 
   const load = useCallback(() => {
     if (!sourceId || tags.length === 0) {
@@ -109,14 +173,16 @@ export default function Trends() {
     const end = Date.now();
     const start = end - rangeMs;
     setLoading(true);
-    const query = usingRecording
-      ? api.recordingSeries(sourceId, { tags, from: start, to: end, maxPoints: 1000 })
-      : api.historianQuery(sourceId, {
-          tags,
-          start: new Date(start).toISOString(),
-          end: new Date(end).toISOString(),
-          maxPoints: 1000
-        });
+    const query = usingLive
+      ? liveSeries(sourceId, tags, start, end)
+      : usingRecording
+        ? api.recordingSeries(sourceId, { tags, from: start, to: end, maxPoints: 1000 })
+        : api.historianQuery(sourceId, {
+            tags,
+            start: new Date(start).toISOString(),
+            end: new Date(end).toISOString(),
+            maxPoints: 1000
+          });
     query
       .then((r) => {
         setData({ series: r.series || [], start, end });
@@ -124,7 +190,7 @@ export default function Trends() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [usingRecording, sourceId, tags, rangeMs]);
+  }, [usingLive, usingRecording, sourceId, tags, rangeMs]);
 
   useEffect(() => {
     load();
@@ -139,13 +205,13 @@ export default function Trends() {
     return () => clearInterval(t);
   }, [autoRefresh, load]);
 
-  const shownSuggestions = suggestions.filter((s) => !tags.includes(s));
+  const shownSuggestions = usingLive ? liveSuggestions : suggestions.filter((s) => !tags.includes(s));
 
   return (
     <div className="flex h-full flex-col">
       <PageHeader
         title="Trends"
-        subtitle="chart what your pipelines wrote into a historian, or a local recording"
+        subtitle="chart live from the message stream, a historian, or a local recording"
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -164,17 +230,18 @@ export default function Trends() {
       />
 
       <div className="flex-1 space-y-4 overflow-y-auto p-6">
-        {historians.length === 0 && recordings.length === 0 ? (
+        {historians.length === 0 && recordings.length === 0 && connectedBrokers.length === 0 ? (
           <EmptyState
             icon={Database}
             title="Nothing to trend yet"
-            hint="Trends charts what Manifold captured. Add an InfluxDB/TimescaleDB historian under Pipelines → Historians, or start a file Recording under Recorder — either can be charted here."
+            hint="Connect a broker to chart live values straight from the message stream — no storage needed — or add an InfluxDB/TimescaleDB historian or a file Recording for longer history."
           />
         ) : (
           <>
             <Card className="p-4">
               <div className="mb-4 flex gap-1 rounded-xl border border-white/10 p-1 w-fit">
                 {[
+                  { key: 'live', label: 'Live', on: connectedBrokers.length > 0 },
                   { key: 'historian', label: 'Historian', on: historians.length > 0 },
                   { key: 'recording', label: 'Recording', on: recordings.length > 0 }
                 ].map((s) => (
@@ -198,20 +265,21 @@ export default function Trends() {
                 ))}
               </div>
               <div className="grid gap-4 md:grid-cols-[240px_1fr_auto]">
-                <Field label={usingRecording ? 'Recording' : 'Historian'}>
+                <Field label={usingLive ? 'Broker' : usingRecording ? 'Recording' : 'Historian'}>
                   <select
-                    value={usingRecording ? recId : histId}
+                    value={sourceId}
                     onChange={(e) => {
-                      if (usingRecording) setRecId(e.target.value);
+                      if (usingLive) setBrokerId(e.target.value);
+                      else if (usingRecording) setRecId(e.target.value);
                       else setHistId(e.target.value);
                       setSuggestions([]);
                     }}
                     className="w-full rounded-xl border border-white/10 bg-surface-950/60 px-3 py-2 text-sm text-slate-100 focus:border-accent-500/60 focus:outline-none focus:ring-2 focus:ring-accent-500/20"
                   >
-                    {(usingRecording ? recordings : historians).map((s) => (
+                    {(usingLive ? connectedBrokers : usingRecording ? recordings : historians).map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name || s.id.slice(0, 8)}
-                        {usingRecording ? '' : ` (${s.type})`}
+                        {usingLive || usingRecording ? '' : ` (${s.type})`}
                       </option>
                     ))}
                   </select>
@@ -222,7 +290,7 @@ export default function Trends() {
                     <div className="flex gap-2">
                       <Input
                         value={query}
-                        placeholder={searchable ? 'Search stored topics… or type a path and press Enter' : 'Type the tag path and press Enter'}
+                        placeholder={usingLive ? 'Search live topics… or type one and press Enter' : searchable ? 'Search stored topics… or type a path and press Enter' : 'Type the tag path and press Enter'}
                         disabled={tags.length >= MAX_TAGS}
                         onChange={(e) => {
                           setQuery(e.target.value);
@@ -313,6 +381,13 @@ export default function Trends() {
                 <p className="mt-3 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-300">
                   Charting a local recording — no external database needed. Type the exact topic path and press Enter;
                   only numeric values are plotted.
+                </p>
+              )}
+              {usingLive && (
+                <p className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+                  Charting live from the broker's message stream — no historian or recording needed. Type a topic path
+                  (e.g. <span className="mono">energy/main/voltage</span>) and press Enter; only numeric values plot, over
+                  the last few minutes held in memory. Turn on Auto 30s to keep it live.
                 </p>
               )}
             </Card>

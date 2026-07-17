@@ -30,10 +30,12 @@ instance beyond your own machine:
 - **Use a read-only viewer token** (`MANIFOLD_VIEWER_TOKEN`) for anyone who
   should not publish, actuate, or reconfigure.
 - **Keep network targets scoped.** Outbound connections (the discovery scanner
-  and the i3X/CESMII/broker-admin HTTP clients) are restricted by an egress
-  guard: loopback, link-local (including cloud metadata `169.254.169.254`),
-  multicast, and reserved ranges are always blocked; RFC1918/LAN targets require
-  `MANIFOLD_ALLOW_PRIVATE_TARGETS=1`. Only enable that on a trusted network.
+  and the i3X/CESMII/broker-admin HTTP clients) pass through an egress guard:
+  loopback, link-local (including cloud metadata `169.254.169.254`), multicast,
+  and reserved ranges are always blocked. RFC1918/LAN targets are **fail-closed
+  by default**; set `MANIFOLD_ALLOW_PRIVATE_TARGETS=1` only on a trusted on-prem
+  network (needed for Discovery and on-prem i3X/CESMII — the server warns at
+  startup when it's on).
 - **Protect the data directory.** `profiles.json` stores broker passwords and
   admin API keys (owner-readable `0600`); restrict the host and the file.
 - **Put TLS and a reverse proxy in front** of any internet-facing instance, and

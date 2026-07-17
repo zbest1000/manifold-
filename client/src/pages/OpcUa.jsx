@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil, Radar, ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
+import { Cpu, Plus, X, Activity, Eye, ListTree, Search, Share2, Box, Pencil, Radar, ShieldCheck, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { useStore } from '@/store/store';
@@ -13,7 +13,7 @@ import GraphSearch from '@/components/GraphSearch';
 import GraphTree from '@/components/GraphTree';
 import JsonView from '@/components/JsonView';
 import { downloadDataUrl, downloadJson } from '@/lib/download';
-import { Card, Button, Badge, Input, Field, EmptyState } from '@/components/ui';
+import { Card, Button, Badge, Input, Field, EmptyState, IconButton } from '@/components/ui';
 import PageHeader from '@/components/PageHeader';
 import ViewTab from '@/components/ViewTab';
 
@@ -170,12 +170,19 @@ export default function OpcUa() {
     [connectionId, expanded]
   );
 
-  const disconnect = async (id) => {
+  // Accepts a connection object (header action) or an id (node panel). Removes
+  // the saved connection server-side, so confirm — there is no undo.
+  const disconnect = async (connOrId) => {
+    const conn = typeof connOrId === 'string' ? opcua.find((c) => c.id === connOrId) : connOrId;
+    const id = conn?.id || connOrId;
+    const label = conn?.name || conn?.endpointUrl || id;
+    if (!window.confirm(`Disconnect and remove OPC UA connection "${label}"?\n\nThis deletes the saved connection. This cannot be undone.`)) return;
     try {
       await api.disconnectOpcua(id);
       const list = await api.listOpcua();
       setOpcua(list.connections);
-      toast.success('Disconnected');
+      if (id === connectionId) setSelected(null);
+      toast.success('Disconnected and removed');
     } catch (e) {
       toast.error(e.message);
     }
@@ -217,7 +224,7 @@ export default function OpcUa() {
                 <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
               </div>
             )}
-            {connected.length > 0 && (
+            {opcua.length > 0 && (
               <select
                 value={connectionId || ''}
                 onChange={(e) => setConnectionId(e.target.value)}
@@ -226,22 +233,27 @@ export default function OpcUa() {
                   editingId && 'ring-1 ring-accent-500/40'
                 )}
               >
-                {connected.map((c) => (
+                {/* All connections, not just connected — a failed server is no longer
+                    invisible; its status is shown so it can be edited or removed. */}
+                {opcua.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
+                    {c.status && c.status !== 'connected' ? `  (${c.status})` : ''}
                   </option>
                 ))}
               </select>
             )}
             {connection && (
-              <button
-                aria-label="Edit connection"
-                title="Edit this connection"
-                onClick={() => edit(connection)}
-                className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-accent-400"
-              >
-                <Pencil size={13} />
-              </button>
+              <>
+                <IconButton icon={Pencil} label="Edit this connection" size={14} onClick={() => edit(connection)} />
+                <IconButton
+                  icon={Trash2}
+                  label="Disconnect and remove this connection"
+                  size={14}
+                  className="hover:bg-rose-500/10 hover:text-rose-300"
+                  onClick={() => disconnect(connection)}
+                />
+              </>
             )}
             <Button
               variant="outline"

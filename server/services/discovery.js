@@ -168,8 +168,11 @@ class DiscoveryService extends EventEmitter {
     const blocked = allHosts.length - hosts.length;
     if (hosts.length === 0) {
       throw new Error(
-        `Every host in ${range} is a blocked target (loopback/link-local/reserved, ` +
-          `or RFC1918 without MANIFOLD_ALLOW_PRIVATE_TARGETS=1). Nothing to scan.`
+        `Nothing to scan in ${range}: every host is a blocked target. Loopback, ` +
+          `link-local/cloud-metadata, multicast and reserved/documentation ranges ` +
+          `(e.g. 192.0.2.0/24 is TEST-NET, not a real subnet) are always blocked. ` +
+          `RFC1918/LAN subnets (192.168.x.0/24, 10.x.0.0/24) require ` +
+          `MANIFOLD_ALLOW_PRIVATE_TARGETS=1 — set it on a trusted network.`
       );
     }
 

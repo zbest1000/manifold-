@@ -46,6 +46,7 @@ export default function Uns() {
   const [view, setView] = useState('topology'); // 'topology' | 'tree'
   const [treeFilter, setTreeFilter] = useState('');
   const [selected, setSelected] = useState(null);
+  const [focusTarget, setFocusTarget] = useState(null); // { brokerId, path } to pan the map onto
   const [pickerOpen, setPickerOpen] = useState(false);
   const [iconTick, setIconTick] = useState(0); // bump after a pick so previews refresh
   const [i3xStatus, setI3xStatus] = useState(null);
@@ -164,10 +165,15 @@ export default function Uns() {
     }
   };
 
-  // Jump from a lint finding / event to the node in the namespace.
+  // Jump from a lint finding / event to the node in the namespace: select it
+  // (highlights it + drives the detail panel) AND pan the topology canvas onto
+  // it, expanding ancestors so it is actually on-screen. A fresh object each
+  // call so clicking the same finding twice re-focuses.
   const jumpTo = (brokerId, path) => {
     const node = flat.byId.get(`uns:${brokerId}:${path}`);
     if (node) setSelected(node);
+    setView('topology'); // the pan-to-node only makes sense on the map
+    setFocusTarget({ brokerId, path });
   };
 
   if (!connected.length && !mountRoots.length) {
@@ -287,7 +293,7 @@ export default function Uns() {
             </div>
           ) : (
           <div className="relative min-w-0 flex-1">
-            <UnsTopology roots={roots} levels={levels} selectedId={selected?.id || null} onSelect={setSelected} />
+            <UnsTopology roots={roots} levels={levels} selectedId={selected?.id || null} onSelect={setSelected} focusTarget={focusTarget} />
           </div>
           )}
 
@@ -588,17 +594,33 @@ function LintPanel({ brokers, onJump, onClose }) {
             {report && report.findings.length === 0 && (
               <p className="text-[11px] text-emerald-400">No structural issues found in {report.stats.topics.toLocaleString()} topics.</p>
             )}
-            {report?.findings.map((f, i) => (
-              <button
-                key={i}
-                onClick={() => f.path && onJump(broker.id, f.path)}
-                className="mb-1 block w-full rounded-lg bg-black/20 px-2 py-1.5 text-left text-[11px] hover:bg-white/5"
-              >
-                <span className={`font-semibold ${SEV_COLOR[f.severity] || 'text-slate-300'}`}>{f.title}</span>
-                {f.path && <span className="ml-1 break-all font-mono text-[10px] text-slate-400">{f.path}</span>}
-                <div className="mt-0.5 text-slate-500">{f.detail}</div>
-              </button>
-            ))}
+            {report?.findings.map((f, i) => {
+              const navigable = Boolean(f.path);
+              const cls = `mb-1 block w-full rounded-lg bg-black/20 px-2 py-1.5 text-left text-[11px] ${navigable ? 'group cursor-pointer transition hover:bg-white/5' : ''}`;
+              const body = (
+                <>
+                  <div className="flex items-start gap-1.5">
+                    <span className={`font-semibold ${SEV_COLOR[f.severity] || 'text-slate-300'}`}>{f.title}</span>
+                    {navigable && (
+                      <span className="ml-auto shrink-0 text-[10px] text-accent-300 opacity-0 transition group-hover:opacity-100">jump →</span>
+                    )}
+                  </div>
+                  {f.path && <div className="mt-0.5 break-all font-mono text-[10px] text-slate-400">{f.path}</div>}
+                  {f.detail && <div className="mt-0.5 text-slate-400">{f.detail}</div>}
+                  {/* WHY it matters — the finding's explanation, previously dropped. */}
+                  {f.why && <div className="mt-1 leading-snug text-[10px] text-slate-500">{f.why}</div>}
+                </>
+              );
+              return navigable ? (
+                <button key={i} type="button" onClick={() => onJump(broker.id, f.path)} className={cls} title="Jump to this node in the topology">
+                  {body}
+                </button>
+              ) : (
+                <div key={i} className={cls}>
+                  {body}
+                </div>
+              );
+            })}
             {report?.truncated && (
               <p className="text-[10px] text-slate-500">
                 Findings truncated — totals: {Object.entries(report.stats.byRule).map(([r, c]) => `${r}: ${c}`).join(', ')}

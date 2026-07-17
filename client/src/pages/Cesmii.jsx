@@ -3,6 +3,7 @@ import { Factory, Plug, LogOut, Search, LineChart, RefreshCw } from 'lucide-reac
 import toast from 'react-hot-toast';
 import { api } from '@/lib/api';
 import { Card, Button, Badge, Input, Field, EmptyState } from '@/components/ui';
+import { Sparkline as ChartSparkline, fmtNum } from '@/components/charts';
 import PageHeader from '@/components/PageHeader';
 
 const BLANK = { endpoint: '', authenticator: '', role: '', userName: '', secret: '' };
@@ -234,22 +235,12 @@ export default function Cesmii() {
 function Sparkline({ samples }) {
   const values = samples.map((s) => Number(s.floatvalue)).filter((v) => Number.isFinite(v));
   if (values.length < 2) return null;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  const w = 300;
-  const h = 60;
-  const pts = values
-    .map((v, i) => `${(i / (values.length - 1)) * w},${h - ((v - min) / span) * h}`)
-    .join(' ');
   return (
     <div className="rounded-lg border border-white/5 bg-surface-950/50 p-2">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-16 w-full" preserveAspectRatio="none">
-        <polyline points={pts} fill="none" stroke="#38bdf8" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-slate-500">
-        <span>min {min}</span>
-        <span>max {max}</span>
+      <ChartSparkline values={values} height={64} />
+      <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
+        <span>min {fmtNum(Math.min(...values))}</span>
+        <span>max {fmtNum(Math.max(...values))}</span>
       </div>
     </div>
   );

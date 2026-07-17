@@ -1,5 +1,6 @@
 'use strict';
 
+const { Agent } = require('undici');
 const { fetchWithTimeout } = require('./httpTimeout');
 
 // All historian HTTP calls get a hard deadline: a wedged historian (TCP accepts,
@@ -7,6 +8,66 @@ const { fetchWithTimeout } = require('./httpTimeout');
 // outbox or a historian route for undici's multi-minute default.
 const HISTORIAN_TIMEOUT_MS = Number(process.env.MANIFOLD_HISTORIAN_TIMEOUT_MS) || 15_000;
 const timedFetch = (url, opts) => fetchWithTimeout(url, opts, HISTORIAN_TIMEOUT_MS);
+
+// HTTP historians (influxdb, timebase) verify the server's TLS certificate by
+// default. On-prem historians commonly serve a self-signed cert — Timebase
+// 1.3.4 even 307-redirects HTTP→HTTPS onto one — so, mirroring the timescaledb
+// sslInsecure/sslRootCert escape hatch (see the pg pool below), a per-connection
+// undici dispatcher opts into accept-any-cert or a pinned CA. No flag ⇒ no
+// dispatcher ⇒ the global default ⇒ full verification. sslInsecure wins over
+// sslRootCert (same precedence as the pg path). Agents are cached so each
+// distinct TLS setting keeps one socket pool, not one per request.
+const tlsAgents = new Map();
+function tlsDispatcher(conn) {
+  const insecure = Boolean(conn.sslInsecure);
+  const ca = conn.sslRootCert ? String(conn.sslRootCert) : '';
+  if (!insecure && !ca) return undefined;
+  const key = insecure ? 'insecure' : `ca:${ca}`;
+  let agent = tlsAgents.get(key);
+  if (!agent) {
+    agent = new Agent({ connect: insecure ? { rejectUnauthorized: false } : { ca } });
+    tlsAgents.set(key, agent);
+  }
+  return agent;
+}
+
+// Node surfaces a rejected certificate as an opaque "fetch failed" (the real
+// reason hides in error.cause.code). Translate the common TLS failures into an
+// actionable message that points at the exact fix, so a self-signed historian
+// reads as a config choice — not a mystery outage — in the outbox lastError and
+// the "Test write" button.
+const TLS_ERROR_CODES = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID'
+]);
+
+// Single entry point for every historian HTTP call: injects the TLS dispatcher
+// and rewrites certificate failures into a fix-it hint.
+async function httpFetch(conn, url, opts, fetchImpl) {
+  const dispatcher = tlsDispatcher(conn);
+  try {
+    return await fetchImpl(url, dispatcher ? { ...opts, dispatcher } : opts);
+  } catch (err) {
+    const code = err?.cause?.code || err?.code;
+    if (TLS_ERROR_CODES.has(code)) {
+      let host = url;
+      try {
+        host = new URL(url).host;
+      } catch {
+        /* url is already fetch-valid; fall back to the raw string */
+      }
+      throw new Error(
+        `TLS certificate rejected (${code}) connecting to ${host}. If this historian uses a ` +
+          `self-signed certificate, enable "Allow self-signed TLS" (or supply its CA certificate) ` +
+          `in the historian settings.`
+      );
+    }
+    throw err;
+  }
+}
 
 /**
  * Historian integrations — time-series targets for pipelines and the recorder.
@@ -19,7 +80,8 @@ const timedFetch = (url, opts) => fetchWithTimeout(url, opts, HISTORIAN_TIMEOUT_
  *
  * - `influxdb`: InfluxDB v2 line-protocol write
  *   (POST {url}/api/v2/write?org=&bucket=&precision=ms, `Authorization: Token`).
- *   Config: { type:'influxdb', url, org, bucket, token, measurement? }.
+ *   Config: { type:'influxdb', url, org, bucket, token, measurement?,
+ *   sslInsecure?, sslRootCert? }.
  * - `timescaledb`: TimescaleDB (or plain PostgreSQL) over the `pg` driver.
  *   Batched multi-row inserts into a samples table (created on first write:
  *   ts timestamptz, topic text, value double precision, raw text, quality
@@ -37,11 +99,17 @@ const timedFetch = (url, opts) => fetchWithTimeout(url, opts, HISTORIAN_TIMEOUT_
  *     body: { "<tagname>": [ { t: ISO-8601, v: value, q: quality }, ... ], ... }
  *   Docs: https://timebase.flow-software.com/en/knowledge-base/timebase-historian-public-rest-api
  *   (the same spec is on any instance's own Swagger at
- *   `http://<host>:4511/api/help`; default HTTP port 4511). The API ships with
- *   no authentication by default; `apiKey` adds `Authorization: Bearer` for
- *   deployments that front it with a token. `writePath` overrides the whole
- *   path if a future version moves it.
- *   Config: { type:'timebase', url, dataset, writePath?, apiKey? }.
+ *   `http://<host>:4511/api/help`; default HTTP port 4511). NOTE: a default
+ *   1.3.4 install enables ASP.NET HTTPS redirection, so `http://host:4511`
+ *   307-redirects to `https://host:4512` — and that TLS listener uses a
+ *   self-signed dev certificate. Point `url` at either port: with `sslInsecure`
+ *   (or `sslRootCert`) set, the dispatcher follows the redirect and accepts the
+ *   cert; without it, the write fails closed with a clear certificate error.
+ *   The API ships with no authentication by default; `apiKey` adds
+ *   `Authorization: Bearer` for deployments that front it with a token.
+ *   `writePath` overrides the whole path if a future version moves it.
+ *   Config: { type:'timebase', url, dataset, writePath?, apiKey?,
+ *   sslInsecure?, sslRootCert? }.
  *   NOTE: Timebase also ingests MQTT/Sparkplug natively — pointing its MQTT
  *   collector at your broker (or at a Manifold pipeline's output namespace)
  *   is an equally supported, often simpler path.
@@ -88,14 +156,14 @@ async function influxWrite(conn, points, fetchImpl) {
   const base = String(conn.url || '').replace(/\/+$/, '');
   if (!base) throw new Error('influxdb url is required');
   const q = new URLSearchParams({ org: conn.org || '', bucket: conn.bucket || '', precision: 'ms' });
-  const res = await fetchImpl(`${base}/api/v2/write?${q}`, {
+  const res = await httpFetch(conn, `${base}/api/v2/write?${q}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
       ...(conn.token ? { Authorization: `Token ${conn.token}` } : {})
     },
     body: toLineProtocol(points, conn.measurement || 'manifold')
-  });
+  }, fetchImpl);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`influxdb write failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
@@ -126,14 +194,14 @@ async function timebaseWrite(conn, points, fetchImpl) {
   const body = Object.fromEntries(byTag);
 
   const path = conn.writePath || timebaseWritePath(conn.dataset);
-  const res = await fetchImpl(`${base}${path}`, {
+  const res = await httpFetch(conn, `${base}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(conn.apiKey ? { Authorization: `Bearer ${conn.apiKey}` } : {})
     },
     body: JSON.stringify(body)
-  });
+  }, fetchImpl);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`timebase write failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
@@ -326,7 +394,7 @@ async function influxQuery(conn, flux, fetchImpl) {
   const base = String(conn.url || '').replace(/\/+$/, '');
   if (!base) throw new Error('influxdb url is required');
   const q = new URLSearchParams({ org: conn.org || '' });
-  const res = await fetchImpl(`${base}/api/v2/query?${q}`, {
+  const res = await httpFetch(conn, `${base}/api/v2/query?${q}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/vnd.flux',
@@ -334,7 +402,7 @@ async function influxQuery(conn, flux, fetchImpl) {
       ...(conn.token ? { Authorization: `Token ${conn.token}` } : {})
     },
     body: flux
-  });
+  }, fetchImpl);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`influxdb query failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
@@ -429,9 +497,9 @@ async function timebaseQuerySeries(conn, { tags, start, end, maxPoints }, fetchI
   const url =
     `${base}/api/datasets/${encodeURIComponent(conn.dataset)}/data?${tagParams}` +
     `&start=${encodeURIComponent(new Date(start).toISOString())}&end=${encodeURIComponent(new Date(end).toISOString())}`;
-  const res = await fetchImpl(url, {
+  const res = await httpFetch(conn, url, {
     headers: { ...(conn.apiKey ? { Authorization: `Bearer ${conn.apiKey}` } : {}) }
-  });
+  }, fetchImpl);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`timebase query failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ''}`);
@@ -497,10 +565,12 @@ async function querySeries(conn = {}, { tags = [], start, end, maxPoints = 1000 
   return backend(conn, { tags, ...range }, fetchImpl);
 }
 
-/** Close pooled Postgres connections (shutdown). */
+/** Close pooled Postgres connections and TLS socket pools (shutdown). */
 async function closePools() {
   for (const { pool } of pgPools.values()) await pool.end().catch(() => {});
   pgPools.clear();
+  for (const agent of tlsAgents.values()) await agent.close().catch(() => {});
+  tlsAgents.clear();
 }
 
 const BACKENDS = { influxdb: influxWrite, timebase: timebaseWrite, timescaledb: timescaleWrite };

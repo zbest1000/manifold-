@@ -447,6 +447,14 @@ const PORT = process.env.PORT || 5000;
 const HOST = process.env.MANIFOLD_HOST || (AUTH_ENABLED ? '0.0.0.0' : '127.0.0.1');
 server.listen(PORT, HOST, () => {
   console.log(`Manifold server listening on ${HOST}:${PORT}`);
+  if (require('./services/egressGuard').ALLOW_PRIVATE) {
+    console.warn(
+      '⚠️  MANIFOLD_ALLOW_PRIVATE_TARGETS is set — the network scanner and outbound ' +
+        'clients may reach RFC1918/LAN addresses. This is safe on a trusted on-prem ' +
+        'network but turns an internet-exposed instance into an SSRF/scan pivot. ' +
+        '(Loopback and cloud metadata stay blocked.)'
+    );
+  }
   if (!AUTH_ENABLED) {
     if (HOST === '127.0.0.1' || HOST === 'localhost') {
       console.warn(

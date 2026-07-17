@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
+import { Sparkline, TimeSeriesChart, fmtNum } from '@/components/charts';
 import { api } from '@/lib/api';
 import ForceGraph from '@/graph/ForceGraph';
 
@@ -537,6 +538,8 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
   const [qos, setQos] = useState(0);
   const [retain, setRetain] = useState(false);
   const [diffSel, setDiffSel] = useState([]); // up to two message ids for payload diff
+  const [historyOpen, setHistoryOpen] = useState(false); // full history-chart popup
+  const [expanded, setExpanded] = useState(false); // blow the panel up to a large modal
 
   useEffect(() => {
     if (!fullTopic) return;
@@ -545,6 +548,14 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
       .then((res) => setHistory(res.messages.slice().reverse()))
       .catch(() => setHistory([]));
   }, [brokerId, fullTopic]);
+
+  // Esc restores the expanded panel to its docked size.
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setExpanded(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
 
   // Merge in live messages for this exact topic
   const live = messages.filter((m) => m.topic === fullTopic);
@@ -583,14 +594,17 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
     );
   };
 
-  const numericSeries = merged
+  // Numeric value history (oldest → newest), with timestamps for a real time
+  // axis in the history popup.
+  const numericPoints = merged
     .slice()
     .reverse()
-    .map((m) => numericFromPayload(m.payload))
-    .filter((v) => v != null);
+    .map((m) => ({ ts: new Date(m.timestamp).getTime(), v: numericFromPayload(m.payload) }))
+    .filter((p) => p.v != null && Number.isFinite(p.ts));
+  const numericSeries = numericPoints.map((p) => p.v);
 
-  return (
-    <aside className="flex w-96 shrink-0 flex-col border-l border-white/5 bg-surface-900/50">
+  const inner = (
+    <>
       <div className="flex items-start justify-between gap-2 border-b border-white/5 px-4 py-3">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-wide text-slate-500">
@@ -605,9 +619,19 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
             )}
           </div>
         </div>
-        <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-300">
-          <X size={16} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? 'Restore panel (Esc)' : 'Expand panel to a larger view'}
+            aria-label={expanded ? 'Restore panel' : 'Expand panel'}
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-300"
+          >
+            {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
+          <button onClick={onClose} aria-label="Close panel" className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-300">
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -646,8 +670,12 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
                 {String(latest.payload)}
               </pre>
             )}
-            {numericSeries.length > 3 && <PanelPlot series={numericSeries} />}
+            {numericSeries.length >= 2 && <PanelPlot series={numericSeries} onExpand={() => setHistoryOpen(true)} />}
           </Card>
+        )}
+
+        {historyOpen && (
+          <HistoryChartModal topic={fullTopic} points={numericPoints} onClose={() => setHistoryOpen(false)} />
         )}
 
         {meta.isLeaf && (
@@ -741,8 +769,29 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
           </div>
         )}
       </div>
-    </aside>
+    </>
   );
+
+  // Expanded: reflow the same content into a large centered modal so the
+  // decoded Sparkplug metrics and the full history list have room to breathe.
+  if (expanded) {
+    return (
+      <div
+        className="fixed inset-0 z-40 grid place-items-center bg-black/60 p-6 backdrop-blur-sm"
+        onClick={() => setExpanded(false)}
+      >
+        <div
+          className="flex h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-surface-900 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-label="Topic detail"
+        >
+          {inner}
+        </div>
+      </div>
+    );
+  }
+  return <aside className="flex w-96 shrink-0 flex-col border-l border-white/5 bg-surface-900/50">{inner}</aside>;
 }
 
 // Structural diff of two selected history messages (older → newer). Shows what
@@ -804,25 +853,83 @@ function Stat({ icon: Icon, label, value }) {
   );
 }
 
-// Numeric history plot for the detail panel.
-function PanelPlot({ series }) {
+// Compact value-history sparkline for the detail panel, with an expand action.
+function PanelPlot({ series, onExpand }) {
   const min = Math.min(...series);
   const max = Math.max(...series);
-  const span = max - min || 1;
-  const w = 320;
-  const h = 70;
-  const pts = series
-    .map((v, i) => `${(i / (series.length - 1)) * w},${h - ((v - min) / span) * h}`)
-    .join(' ');
   return (
     <div className="mt-3 rounded-lg border border-white/5 bg-surface-950/50 p-2">
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-20 w-full" preserveAspectRatio="none">
-        <polyline points={pts} fill="none" stroke="#38bdf8" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-slate-500">
-        <span>min {min}</span>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-2xs font-semibold uppercase tracking-wide text-slate-500">Value history</span>
+        {onExpand && (
+          <button onClick={onExpand} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-slate-400 transition hover:bg-white/5 hover:text-accent-300">
+            <Maximize2 size={11} /> Expand
+          </button>
+        )}
+      </div>
+      <div className="cursor-pointer" onClick={onExpand}>
+        <Sparkline values={series} height={72} />
+      </div>
+      <div className="mono mt-1 flex justify-between text-2xs text-slate-500">
+        <span>min {fmtNum(min)}</span>
         <span>{series.length} pts</span>
-        <span>max {max}</span>
+        <span>max {fmtNum(max)}</span>
+      </div>
+    </div>
+  );
+}
+
+// Full value-history chart in a popup — the shared Recharts time-series (grid,
+// axes, hover tooltip) plus summary stats. Built from the in-memory
+// recent-message ring for the topic; no historian required.
+function HistoryChartModal({ topic, points, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const values = points.map((p) => p.v);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const avg = values.reduce((s, v) => s + v, 0) / values.length;
+  const last = points[points.length - 1];
+  const tspan = points[points.length - 1].ts - points[0].ts || 1;
+  const durS = Math.max(1, Math.round(tspan / 1000));
+  const durLabel = durS < 90 ? `${durS}s` : durS < 5400 ? `${Math.round(durS / 60)}m` : `${(durS / 3600).toFixed(1)}h`;
+  const chartSeries = [{ tag: topic, points: points.map((p) => [p.ts, p.v]) }];
+
+  const Stat = ({ label, value }) => (
+    <div>
+      <p className="text-2xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mono text-sm font-semibold text-slate-100">{value}</p>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-surface-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Value history">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-2xs uppercase tracking-wide text-slate-500">Value history · last {durLabel}</p>
+            <p className="mono truncate text-sm font-medium text-slate-100">{topic}</p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-slate-200">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="grid grid-cols-4 gap-3 rounded-xl border border-white/5 bg-surface-950/40 p-3">
+          <Stat label="Last" value={fmtNum(last.v)} />
+          <Stat label="Min" value={fmtNum(min)} />
+          <Stat label="Max" value={fmtNum(max)} />
+          <Stat label="Avg" value={fmtNum(avg)} />
+        </div>
+        <div className="mt-3 rounded-xl border border-white/5 bg-surface-950/40 p-2">
+          <TimeSeriesChart series={chartSeries} height={280} />
+          <div className="mono mt-1 px-1 text-center text-2xs text-slate-500">
+            {points.length} points · from the live message ring
+          </div>
+        </div>
       </div>
     </div>
   );

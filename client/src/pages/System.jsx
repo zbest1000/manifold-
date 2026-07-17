@@ -3,6 +3,7 @@ import { Activity, Cpu, Radio, Workflow, Database, HardDriveDownload, ShieldChec
 import { api } from '@/lib/api';
 import PageHeader from '@/components/PageHeader';
 import { Card, Button, EmptyState } from '@/components/ui';
+import { Sparkline } from '@/components/charts';
 
 /**
  * System — the tool that watches your namespace, watched. Parses Manifold's own
@@ -84,38 +85,23 @@ function fmtUptime(sec) {
 
 // --- sparkline ---------------------------------------------------------------
 
-function Sparkline({ points, warn }) {
-  const w = 88;
-  const h = 26;
-  if (!points || points.length < 2) return <svg width={w} height={h} className="opacity-40" />;
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const span = max - min || 1;
-  const step = w / (points.length - 1);
-  const d = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - ((p - min) / span) * (h - 4) - 2).toFixed(1)}`)
-    .join(' ');
-  const color = warn ? '#fbbf24' : '#38bdf8';
-  return (
-    <svg width={w} height={h} className="shrink-0">
-      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function StatTile({ label, value, unit, history, warn, sub }) {
   return (
     <div className={`rounded-xl border px-3 py-2.5 ${warn ? 'border-amber-500/30 bg-amber-500/[0.06]' : 'border-white/5 bg-white/[0.02]'}`}>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
+          {/* Wrap the label instead of truncating — "Delivered"/"Bindings published"
+              were cut to "DELI…"/"BINDIN…" in the narrow tiles. */}
+          <p className="text-2xs font-medium uppercase tracking-wide text-slate-500" title={label}>{label}</p>
           <p className={`mt-0.5 text-lg font-semibold tabular-nums ${warn ? 'text-amber-300' : 'text-slate-100'}`}>
             {value}
             {unit && <span className="ml-1 text-xs font-normal text-slate-500">{unit}</span>}
           </p>
-          {sub && <p className="truncate text-[11px] text-slate-500">{sub}</p>}
+          {sub && <p className="truncate text-2xs text-slate-500">{sub}</p>}
         </div>
-        <Sparkline points={history} warn={warn} />
+        <div className="w-24 shrink-0">
+          <Sparkline values={history} warn={warn} height={28} />
+        </div>
       </div>
     </div>
   );
@@ -127,7 +113,11 @@ function Section({ icon: Icon, title, children, warn }) {
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
         <Icon size={15} className={warn ? 'text-amber-400' : 'text-accent-400'} /> {title}
       </h2>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{children}</div>
+      {/* auto-fit so tiles never shrink below a label-readable width, whether the
+          section is full-width or half-width */}
+      <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {children}
+      </div>
     </Card>
   );
 }
@@ -193,12 +183,18 @@ export default function System() {
   const brokers = useMemo(() => (metrics ? distinctLabel(metrics, 'manifold_broker_topics', 'broker') : []), [metrics]);
   const recordings = useMemo(() => (metrics ? distinctLabel(metrics, 'manifold_recorder_points_total', 'recording') : []), [metrics]);
 
-  if (!metrics && error) {
+  // Until the first poll resolves, metrics is null — render a loading/error
+  // state instead of falling through to val()/sumBy(), which iterate over it.
+  if (!metrics) {
     return (
       <div className="flex h-full flex-col">
         <PageHeader title="System" subtitle="Manifold's own health and Prometheus readings" />
         <div className="flex-1 p-6">
-          <EmptyState icon={AlertTriangle} title="Couldn't read /metrics" hint={error} />
+          {error ? (
+            <EmptyState icon={AlertTriangle} title="Couldn't read /metrics" hint={error} />
+          ) : (
+            <div className="grid h-full place-items-center text-sm text-slate-500">Loading health metrics…</div>
+          )}
         </div>
       </div>
     );

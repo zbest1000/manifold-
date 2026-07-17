@@ -98,13 +98,17 @@ jobs:
       timebase:
         # Flow Software's Timebase historian (the `timebase` backend in
         # server/services/historians.js). Free product: runs headless with no
-        # license acceptance, env vars, or credentials — the REST API on 4511
-        # is unauthenticated by default (4512 is only the HTTPS listener, not
-        # needed here). 1.3.4 pinned = Docker Hub's current `latest`.
+        # license acceptance, env vars, or credentials. A default 1.3.4 install
+        # enables ASP.NET HTTPS redirection, so the plain-HTTP API on 4511
+        # 307-redirects to the self-signed HTTPS listener on 4512 — BOTH ports
+        # are published so the integration test can follow that redirect (it
+        # sets sslInsecure to accept the dev cert). 1.3.4 pinned = Docker Hub's
+        # current `latest`.
         # Docs: https://timebase.flow-software.com/en/knowledge-base/quick-start-for-docker
         image: timebase/historian:1.3.4
         ports:
           - 4511:4511
+          - 4512:4512
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -126,10 +130,13 @@ jobs:
           wait_port emqx 1883
           wait_port emqx-ws 8083
           wait_port timescaledb 5432
-          # Timebase readiness = its REST API answers, not just the socket:
-          # GET /api/datasets is the cheapest documented endpoint.
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4511/api/datasets && break; sleep 2; done
-          curl -fsS http://127.0.0.1:4511/api/datasets || { echo "::error::timebase never became healthy"; exit 1; }
+          # Timebase readiness = its REST API answers, not just the socket.
+          # 1.3.4 redirects HTTP→HTTPS onto a self-signed cert, so probe the
+          # HTTPS listener directly with -k (the same dev cert the integration
+          # test accepts via sslInsecure). Plain http + `-fsS` would exit 0 on
+          # the 307 without ever reaching the API — a false "healthy".
+          for i in $(seq 1 30); do curl -fsSk https://127.0.0.1:4512/api/datasets && break; sleep 2; done
+          curl -fsSk https://127.0.0.1:4512/api/datasets || { echo "::error::timebase never became healthy"; exit 1; }
       - name: Run real-service integration tests
         working-directory: server
         env:

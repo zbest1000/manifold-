@@ -141,10 +141,25 @@ function ConfigCard() {
   };
 
   const doImport = async (file) => {
+    // Import merges into the live config by id (overwriting existing entries) —
+    // confirm before mutating a running instance's DataOps setup.
+    let cfg;
+    try {
+      cfg = JSON.parse(await file.text());
+    } catch (e) {
+      setResult({ error: `Not valid JSON: ${e.message}` });
+      return;
+    }
+    const counts = ['historians', 'pipelines', 'models', 'recordings', 'contracts', 'bindings', 'alertRules', 'mounts']
+      .map((k) => (Array.isArray(cfg[k]) && cfg[k].length ? `${cfg[k].length} ${k}` : null))
+      .filter(Boolean)
+      .join(', ');
+    if (!window.confirm(`Import this configuration?\n\n${counts || 'No recognizable items found'}.\n\nEntries with matching ids will be OVERWRITTEN in the running instance. This cannot be undone.`)) {
+      return;
+    }
     setImporting(true);
     setResult(null);
     try {
-      const cfg = JSON.parse(await file.text());
       const res = await api.importConfig(cfg);
       setResult(res.imported);
     } catch (e) {
