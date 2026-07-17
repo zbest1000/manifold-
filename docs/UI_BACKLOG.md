@@ -46,6 +46,21 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] **Graph overhaul (2D + 3D).** A large batch driven by user reports:
+  - Properties click bug: 2D left-click selection ran on the canvas, which
+    d3-zoom/d3-drag preempt, so selection silently failed (only tree/3D worked).
+    Moved the selection pointerup/pointermove to `window` (like the 3D renderer).
+  - Search-to-select: the graph search now has a clickable results dropdown that
+    selects a node and opens its properties — reliable in a dense graph.
+  - Legend fix: `groupColor` collided groups to the same colour via
+    `palette[idx % len]`; replaced with a fixed semantic `GROUP_COLORS` map.
+  - 3D: density-controlled node names, a Values line, node-shape modes (cube/
+    diamond/…), and a Flow toggle (nodes flash on message activity).
+  - Multi-broker: a multi-select broker picker (one / several / all) with a
+    merged graph, plus two new demo broker instances (North/South distinct data).
+  - Beautify (2D): a real visual mode — node bloom + glowing links on the radial
+    layout, not just a layout switch.
+  - Still open: 3D Activity (size by rate) and the replay redesign.
 - [x] System health tile grid didn't scale: the Broker-ingest and Recorder
   sections rendered one tile per broker/recording in a flat grid with no cap,
   collapse, or filter, and the fixed process metrics scrolled away. Added a
