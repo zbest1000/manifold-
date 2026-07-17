@@ -100,7 +100,12 @@ export default function Trends() {
       .then((r) => {
         const files = (r.recordings || []).filter((rec) => rec.target?.type !== 'historian');
         setRecordings(files);
-        if (files[0]) setRecId((prev) => prev || files[0].id);
+        if (files[0]) {
+          setRecId((prev) => prev || files[0].id);
+          // A recording has persisted history, so default to it instead of the
+          // memory-only live view — Trends then has data on first load.
+          setSourceType((prev) => (prev === 'live' ? 'recording' : prev));
+        }
       })
       .catch(() => {});
   }, []);
@@ -114,8 +119,8 @@ export default function Trends() {
   const usingLive = sourceType === 'live';
   const selected = useMemo(() => historians.find((h) => h.id === histId) || null, [historians, histId]);
   // Historians (except Timebase) offer a tag-listing search; the live source
-  // suggests from the broker's observed topics; recordings are typed by path.
-  const searchable = (sourceType === 'historian' && selected && selected.type !== 'timebase') || usingLive;
+  // suggests from the broker's observed topics; recordings list captured topics.
+  const searchable = (sourceType === 'historian' && selected && selected.type !== 'timebase') || usingLive || usingRecording;
 
   // Live topic suggestions from the broker's observed topic set, filtered by the
   // query — so you can pick a topic to trend instead of typing it blind.
@@ -132,25 +137,29 @@ export default function Trends() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usingLive, brokerId, query, tags, topicVersion]);
 
-  // Debounced tag search against the historian itself.
+  // Debounced tag search against the active stored source (historian or
+  // recording). The live source suggests locally via liveSuggestions instead.
   useEffect(() => {
-    if (!histId || !searchable) {
+    if (usingLive) {
+      setSuggestions([]);
+      return;
+    }
+    const id = usingRecording ? recId : histId;
+    if (!id || !searchable) {
       setSuggestions([]);
       return;
     }
     const seq = ++searchSeq.current;
     const t = setTimeout(() => {
-      api
-        .historianTags(histId, query, 25)
-        .then((r) => {
-          if (seq === searchSeq.current) setSuggestions(r.tags || []);
-        })
-        .catch(() => {
-          if (seq === searchSeq.current) setSuggestions([]);
-        });
+      const p = usingRecording ? api.recordingTags(id, query, 25) : api.historianTags(id, query, 25);
+      p.then((r) => {
+        if (seq === searchSeq.current) setSuggestions(r.tags || []);
+      }).catch(() => {
+        if (seq === searchSeq.current) setSuggestions([]);
+      });
     }, 300);
     return () => clearTimeout(t);
-  }, [histId, query, searchable]);
+  }, [usingLive, usingRecording, recId, histId, query, searchable]);
 
   const addTag = (raw) => {
     const tag = String(raw || '').trim();

@@ -105,4 +105,18 @@ router.get('/:id/series', async (req, res) => {
   }
 });
 
+// GET /api/recorder/:id/tags?query=&limit= — distinct numeric topics captured,
+// so the Trends recording source can search instead of typing a path blind.
+router.get('/:id/tags', async (req, res) => {
+  const { profiles, recorder } = req.app.locals.services;
+  if (!profiles.getIn('recordings', req.params.id)) {
+    return res.status(404).json({ error: 'Recording not found' });
+  }
+  try {
+    res.json({ tags: await recorder.tags(req.params.id, { query: req.query.query || '', limit: Number(req.query.limit) || 50 }) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

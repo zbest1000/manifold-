@@ -23,5 +23,15 @@
     }
   },
   "cesmii": null,
-  "i3x": null
+  "i3x": null,
+  "recordings": {
+    "demo-historian": {
+      "id": "demo-historian",
+      "name": "Built-in historian",
+      "brokerId": "demo-mqtt",
+      "filter": "factory/#",
+      "target": { "type": "file" },
+      "enabled": true
+    }
+  }
 }

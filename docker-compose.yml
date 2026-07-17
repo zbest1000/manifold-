@@ -47,6 +47,8 @@ services:
     environment:
       MQTT_URL: mqtt://mqtt:1883
       TICK_MS: "1500"
+      # Bigger dataset for load testing (1 ~= 350 topics, 3 ~= 1000).
+      SIM_SCALE: "3"
     depends_on:
       mqtt:
         condition: service_healthy

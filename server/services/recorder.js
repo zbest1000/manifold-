@@ -22,6 +22,25 @@ const { matchParts, compiledView } = require('./mqttMatch');
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 const READ_LIMIT_MAX = 5000;
 
+// Pull a numeric value out of a recorded payload for charting. Mirrors the
+// Trends live source: handles a bare number, a numeric string, or a JSON object
+// carrying a value-ish field ({ value: 46, unit: 'C' } — the demo's shape).
+function numericOf(payload) {
+  if (typeof payload === 'number') return Number.isFinite(payload) ? payload : null;
+  if (typeof payload === 'string') {
+    const n = Number(payload);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (payload && typeof payload === 'object') {
+    for (const k of ['value', 'v', 'val', 'reading']) {
+      if (typeof payload[k] === 'number' && Number.isFinite(payload[k])) return payload[k];
+    }
+    const first = Object.values(payload).find((v) => typeof v === 'number' && Number.isFinite(v));
+    return first ?? null;
+  }
+  return null;
+}
+
 // Reduce a chronological [[ts, value], ...] series to at most `cap` points by
 // keeping the last value in each of `cap` equal time buckets — a cheap,
 // order-preserving downsample for charting long recordings.
@@ -199,8 +218,8 @@ class Recorder {
     for await (const p of this._records(id)) {
       if (wanted.size && !wanted.has(p.topic)) continue;
       if (p.t < from || p.t > to) continue;
-      const num = typeof p.v === 'number' ? p.v : Number(p.v);
-      if (!Number.isFinite(num)) continue; // only numeric points chart
+      const num = numericOf(p.v);
+      if (num == null) continue; // only numeric points chart
       if (!byTag.has(p.topic)) byTag.set(p.topic, []);
       byTag.get(p.topic).push([p.t, num]);
     }
@@ -208,6 +227,25 @@ class Recorder {
     const series = [];
     for (const [tag, points] of byTag) series.push({ tag, points: downsampleLastPerBucket(points, cap) });
     return { series };
+  }
+
+  /**
+   * Distinct numeric topics captured by a recording, so the Trends "Recording"
+   * source can offer a searchable tag list instead of blind typing. Scans the
+   * file for topics whose payload yields a number; bounded and sorted.
+   */
+  async tags(id, { query = '', limit = 50 } = {}) {
+    await this.sync(id);
+    const q = String(query || '').toLowerCase();
+    const seen = new Set();
+    for await (const p of this._records(id)) {
+      if (seen.has(p.topic)) continue;
+      if (numericOf(p.v) == null) continue; // only chartable topics
+      seen.add(p.topic);
+    }
+    let list = [...seen];
+    if (q) list = list.filter((t) => t.toLowerCase().includes(q));
+    return list.sort().slice(0, Math.min(Number(limit) || 50, 200));
   }
 
   remove(id) {

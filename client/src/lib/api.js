@@ -133,6 +133,11 @@ export const api = {
     const q = new URLSearchParams({ tags: tags.join(','), from, to, maxPoints }).toString();
     return request(`/api/recorder/${encodeURIComponent(id)}/series?${q}`);
   },
+  // Distinct numeric topics captured by a recording, for the Trends tag search.
+  recordingTags: (id, query = '', limit = 50) => {
+    const q = new URLSearchParams({ query, limit }).toString();
+    return request(`/api/recorder/${encodeURIComponent(id)}/tags?${q}`);
+  },
   startReplay: (body) => request('/api/recorder/replay', { method: 'POST', body: JSON.stringify(body) }),
   stopReplay: () => request('/api/recorder/replay', { method: 'DELETE' }),
 
