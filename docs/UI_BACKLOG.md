@@ -8,6 +8,22 @@ PR that closed them is noted inline.
 
 ### Medium
 
+- [ ] **Built-in historian stops at its file cap, silently breaking the demo's
+  Trends.** The recorder (`server/services/recorder.js`) appends to an
+  append-only JSONL and, at `DEFAULT_MAX_BYTES` (50 MB), sets `s.full = true` and
+  stops recording forever (`lastError: "file cap reached — recording stopped"`).
+  On a long-running demo it fills within hours, after which Trends' default source
+  ("Recording → Built-in historian") returns `{series: []}` for any recent range —
+  the chart shows "No samples…" (now correct after the empty-state fix) but there
+  is simply no recent data. Fix: roll over instead of stopping — when the cap is
+  hit, compact the file to keep roughly the newest half (flush + close the write
+  stream, rewrite the tail aligned to a line boundary, reopen in append mode) so
+  recent history always survives. Needs a server-side change + a recorder test;
+  deferred rather than rushed mid-loop because a bad file rewrite could corrupt or
+  drop recordings. (The existing stuck `demo-historian` file also needs clearing
+  once, since it persists on the `/data` volume across container recreation.)
+
+
 - [~] **Modal portal consistency.** A shared portaled `Modal` primitive now
   exists (`components/ui.jsx`) — it renders through `document.body` (escaping any
   `backdrop-blur` ancestor Card, which becomes the containing block for
@@ -60,6 +76,17 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] **Trends showed a misleading empty state for an empty/stopped recording.**
+  Found while sweeping pages. With a source (a recording) and a tag both selected,
+  but the recorder returning `{series: []}` (e.g. the built-in historian was full/
+  stopped, or the data is all outside the range), `TrendChart` computed
+  `state==='empty'` (keyed only on `series.length === 0`) and showed *"Pick a
+  source and add tags to trend"* — as if nothing were selected. Now `Trends.jsx`
+  synthesizes empty-point series for the requested tags when the source returns
+  none, so the chart shows the correct *"No samples for these tags in this time
+  range."* Verified live. (`pages/Trends.jsx`.)
+- [x] **Tags copy: "will announces offline" → "with a Last Will that announces
+  offline."** Grammar fix on the Primary Host State explainer. (`pages/Tags.jsx`.)
 - [x] **Flows "click a device for its metrics" never showed the card (stacked
   bug).** Found while broad-testing other pages after the property-pane work. The
   Flows Producers/Consumers device trees use the same `ForceGraph`, but wired
