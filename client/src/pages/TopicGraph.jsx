@@ -96,6 +96,7 @@ export default function TopicGraph() {
   const [beautify3d, setBeautify3d] = useState(false);
   const [labelDensity3d, setLabelDensity3d] = useState(0.4);
   const [nodeShape3d, setNodeShape3d] = useState('sphere');
+  const [flow3d, setFlow3d] = useState(false);
   const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
@@ -325,14 +326,17 @@ export default function TopicGraph() {
   }, [brokerId, liveMsgs]);
 
   // Feed live message activity to the graph's flow animation. Maps an incoming
-  // message on this broker to its leaf node id (see buildMqttGraph node ids).
+  // message on any ACTIVE broker to its leaf node id (works in multi-broker mode
+  // too, since node ids are namespaced per broker).
   const activitySource = useCallback(
-    (pulse) =>
-      onMessageActivity((msg) => {
-        if (msg.brokerId !== brokerId) return;
-        pulse(`topic:${brokerId}:${msg.topic}`);
-      }),
-    [brokerId]
+    (pulse) => {
+      const active = new Set(activeIds.split(',').filter(Boolean));
+      return onMessageActivity((msg) => {
+        if (!active.has(msg.brokerId)) return;
+        pulse(`topic:${msg.brokerId}:${msg.topic}`);
+      });
+    },
+    [activeIds]
   );
 
   // Double-click a branch node to collapse/expand its subtree.
@@ -472,6 +476,8 @@ export default function TopicGraph() {
                 showValues={showValues}
                 nodeValues={showValues ? nodeValues : null}
                 nodeShape={nodeShape3d}
+                flow={flow3d}
+                activitySource={activitySource}
               />
             </Suspense>
             <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
@@ -513,6 +519,8 @@ export default function TopicGraph() {
               onShowValues={() => setShowValues(!showValues)}
               nodeShape={nodeShape3d}
               onNodeShape={setNodeShape3d}
+              flow={flow3d}
+              onFlow={() => setFlow3d((v) => !v)}
             />
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate. Scroll to zoom. Click a node for details. The style dropdown up top restyles this view too.

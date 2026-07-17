@@ -19,6 +19,9 @@ const VALUE_LABEL_MAX = 90; // fewer when live values are on (sprites rebuild pe
 const LINK_OPACITY = 0.35;
 const IDLE_MS = 2000; // keep the rAF loop alive this long after interaction
 const AUTO_ROTATE_SPEED = 0.0022; // rad/frame — a slow, cinematic spin
+const FLOW_COLOR = new THREE.Color('#ffffff'); // nodes flash toward this on a message
+const FLOW_TMP = new THREE.Color(); // reusable scratch for the pulse lerp
+const FLOW_DECAY = 0.9; // per-frame pulse decay
 
 /** Strip the alpha channel from an rgba() color (link opacity is constant here). */
 function opaqueColor(color) {
@@ -138,7 +141,9 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     labelDensity = 0.4, // 0–1  fraction of LABEL_MAX nodes to name
     showValues = false, // draw each labelled node's latest value
     nodeValues = null, // { [nodeId]: value } for the value line
-    nodeShape = 'sphere' // sphere | cube | diamond | tetra | icosa
+    nodeShape = 'sphere', // sphere | cube | diamond | tetra | icosa
+    flow = false, // flash nodes as messages arrive (live message flow)
+    activitySource = null // (pulse) => unsubscribe; fires a node id per message
   },
   ref
 ) {
@@ -153,6 +158,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
   const selSpriteRef = useRef(null);
   const autoRotateRef = useRef(false); // read by the render loop each frame
   const nodeScaleRef = useRef(nodeScale); // keeps the selection ring hugging scaled nodes
+  const flowRef = useRef(false); // keeps the loop alive while message-flow is on
+  const pulseRef = useRef(new Map()); // nodeId -> pulse intensity (0..1), decays per frame
+  const idxRef = useRef(new Map()); // nodeId -> instance index
+  const baseColorRef = useRef([]); // per-index base THREE.Color, so a pulse can restore it
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
@@ -196,9 +205,36 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const loop = () => {
       raf = 0;
       if (autoRotateRef.current) rotRef.current.yaw += AUTO_ROTATE_SPEED;
+      // Message-flow: flash active nodes toward white, decaying back to base.
+      if (pulseRef.current.size) {
+        const mesh = objsRef.current?.nodeMesh;
+        if (mesh?.instanceColor) {
+          const bases = baseColorRef.current;
+          const idx = idxRef.current;
+          for (const [id, s] of pulseRef.current) {
+            const i = idx.get(id);
+            const base = i != null ? bases[i] : null;
+            if (base == null) {
+              pulseRef.current.delete(id);
+              continue;
+            }
+            const ns = s * FLOW_DECAY;
+            if (ns < 0.05) {
+              mesh.setColorAt(i, base);
+              pulseRef.current.delete(id);
+            } else {
+              mesh.setColorAt(i, FLOW_TMP.copy(base).lerp(FLOW_COLOR, ns));
+              pulseRef.current.set(id, ns);
+            }
+          }
+          mesh.instanceColor.needsUpdate = true;
+        } else {
+          pulseRef.current.clear();
+        }
+      }
       renderFrame();
       const interacting = performance.now() - lastActive < IDLE_MS;
-      if ((interacting || autoRotateRef.current) && !document.hidden) raf = requestAnimationFrame(loop);
+      if ((interacting || autoRotateRef.current || flowRef.current || pulseRef.current.size) && !document.hidden) raf = requestAnimationFrame(loop);
     };
     const requestRender = (sustain = false) => {
       if (sustain) lastActive = performance.now();
@@ -364,6 +400,8 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const col = new THREE.Color();
     const positions = new Float32Array(nodes.length * 3);
     const radii = new Float32Array(nodes.length);
+    const nodeIndex = new Map();
+    const baseColors = new Array(nodes.length);
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       const r = nodeRadius(n);
@@ -371,12 +409,18 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       positions[i * 3 + 1] = n.y;
       positions[i * 3 + 2] = n.z;
       radii[i] = r;
+      nodeIndex.set(n.id, i);
       pos.set(n.x, n.y, n.z);
       const s = r * nodeScaleRef.current;
       scl.set(s, s, s);
       nodeMesh.setMatrixAt(i, m4.compose(pos, quat, scl));
-      nodeMesh.setColorAt(i, col.set(colorFor(n)));
+      const c = new THREE.Color(colorFor(n));
+      baseColors[i] = c;
+      nodeMesh.setColorAt(i, c);
     }
+    idxRef.current = nodeIndex;
+    baseColorRef.current = baseColors;
+    pulseRef.current.clear();
     nodeMesh.instanceMatrix.needsUpdate = true;
     if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
     group.add(nodeMesh);
@@ -482,6 +526,27 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     if (autoRotateRef.current) threeRef.current?.requestRender();
   }, [autoRotate, beautify]);
 
+  // Message-flow: subscribe to the activity bus and flash nodes as messages
+  // arrive. flowRef keeps the on-demand loop running while flow is on.
+  useEffect(() => {
+    flowRef.current = flow;
+    if (!flow || !activitySource) {
+      pulseRef.current.clear();
+      return undefined;
+    }
+    threeRef.current?.requestRender();
+    const unsub = activitySource((id) => {
+      if (idxRef.current.has(id)) {
+        pulseRef.current.set(id, 1);
+        threeRef.current?.requestRender();
+      }
+    });
+    return () => {
+      if (typeof unsub === 'function') unsub();
+      flowRef.current = false;
+    };
+  }, [flow, activitySource]);
+
   // Node colours: depth-graded ramp when Beautify is on, else the group palette.
   useEffect(() => {
     const three = threeRef.current;
@@ -491,8 +556,9 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     const { nodeMesh, maxDepth } = objs;
     const inner = new THREE.Color(style.palette[0]);
     const outer = new THREE.Color(style.palette[style.palette.length - 1]);
-    const c = new THREE.Color();
+    const bases = baseColorRef.current;
     for (let i = 0; i < nodes.length; i++) {
+      const c = bases[i] || (bases[i] = new THREE.Color());
       if (beautify) {
         const t = maxDepth ? (nodes[i].depth || 0) / maxDepth : 0;
         c.copy(inner).lerp(outer, t);

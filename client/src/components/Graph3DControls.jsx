@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Sparkles, RotateCw, ChevronDown, ChevronUp, Tag } from 'lucide-react';
+import { Sparkles, RotateCw, ChevronDown, ChevronUp, Tag, Activity } from 'lucide-react';
 import clsx from 'clsx';
 
 /**
@@ -21,7 +21,9 @@ export default function Graph3DControls({
   showValues,
   onShowValues,
   nodeShape,
-  onNodeShape
+  onNodeShape,
+  flow,
+  onFlow
 }) {
   const [open, setOpen] = useState(false);
   const shapes = [
@@ -55,6 +57,18 @@ export default function Graph3DControls({
       {open && (
         <div className="space-y-3 border-t border-white/5 px-3 py-3">
           <div className="flex gap-2">
+            {onFlow && (
+              <button
+                onClick={onFlow}
+                title="Flash nodes as messages arrive"
+                className={clsx(
+                  'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
+                  flow ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
+                )}
+              >
+                <Activity size={13} className={clsx(flow && 'animate-pulse text-accent-300')} /> Flow
+              </button>
+            )}
             <button
               onClick={onAutoRotate}
               className={clsx(
