@@ -30,13 +30,6 @@ PR that closed them is noted inline.
   over-zoom above and makes the paper canvas very tall. Mounts probably want to
   seed collapsed (root only), unlike broker namespaces which seed to level 1.
 
-### High
-
-- [ ] **One shared Y axis flattens mixed-magnitude tags.** Now easy to hit on
-  Trends: charting `speed_rpm` (~1450) with `temperature` (~50) pins the
-  temperature to a flat line at the axis floor. Fix: a normalize toggle or a
-  dual/secondary Y axis, and show units. (`components/TrendChart.jsx`.)
-
 ### Low
 
 - [ ] **System "Process health" sparklines are blank right after a restart.**
@@ -52,6 +45,10 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] A shared Y axis flattened mixed-magnitude tags (temperature ~50 went flat
+  next to speed ~1450). Added a Normalize toggle to Trends that rescales each
+  series to its own 0-100% range so shapes compare directly; the legend keeps
+  the real min-max. (`components/TrendChart.jsx`.)
 - [x] Trends read empty out of the box and, worse, a file recording of the demo
   charted nothing because `recorder.series()` did `Number(objectPayload)` = NaN.
   Fixed the numeric extraction (handles `{value,unit}`), added a searchable
