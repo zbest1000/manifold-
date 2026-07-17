@@ -101,6 +101,15 @@ PR that closed them is noted inline.
   panel (`Compressed Air / utilities.air`); Properties button enabled in both.
   Big-mode graphs (>4000 nodes) still select via the window `onUp` path (subject
   returns null there, so d3-drag doesn't capture). (`graph/ForceGraph.jsx`.)
+  - Follow-up verification pass (real CDP clicks, one node pinned under the click
+    point on each surface): the property/detail pane opens on **Topics 2D**
+    (ForceGraph+d3-drag, the fixed path), **i3X 2D** (ForceGraph), **Topics 3D**
+    (three.js raycast — camera rotated to align a node to the click point), and
+    **UNS** (custom canvas with window `pointerup`, no d3-drag — had to hard-pin
+    the node in `manualRef` first because the live 300+/s topology re-lays out and
+    drifts nodes out from under the click). No other selection path was broken;
+    d3-drag was the sole defect. OPC UA uses the same `ForceGraph`, so it inherits
+    the fix.
 - [x] **3D Activity sizing (size nodes by message rate).** The 2D graph had an
   Activity toggle that swells nodes by their live message rate; the 3D view had
   Flow (colour pulse) but no size equivalent. Added an Activity toggle to the
