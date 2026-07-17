@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Play, Pause, RotateCcw, Gauge } from 'lucide-react';
+import { Play, Pause, RotateCcw, Gauge, History } from 'lucide-react';
 
 /**
- * Replays buffered message activity over the graph. Steps through the buffered
- * messages in chronological order (time-compressed) and fires `graphRef.pulseNode`
- * for each, so you can watch a burst of traffic play back on the topology.
+ * Replays the recently buffered message traffic over the graph. Steps through
+ * the buffer oldest-to-newest (time-compressed) and fires `graphRef.pulseNode`
+ * for each, so you can watch a burst of activity play back on the topology.
  *
- * The track is a real seek control: click or drag to scrub, arrow keys to nudge.
- * Speed cycles 0.5x/1x/2x, and the label shows the replayed clock time.
+ * Framed so it explains itself: a header names it and shows the scope (how many
+ * messages, over what span), the track runs oldest → now with a *relative*
+ * readout ("-6.4s" → "now"), and a "Replaying" indicator marks that the graph
+ * flashes are a replay, not live traffic. The track is a real seek control:
+ * click/drag to scrub, arrow keys to nudge, speed cycles 0.5x/1x/2x.
  */
 const SPEEDS = [0.5, 1, 2];
 
-function fmtClock(ms) {
-  if (!Number.isFinite(ms)) return '--:--:--';
-  const d = new Date(ms);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+// How far behind "now" the playhead sits, phrased relatively so it reads as
+// "replaying the recent past" rather than an unexplained wall-clock time.
+function fmtBehind(ms) {
+  if (!Number.isFinite(ms)) return '';
+  if (ms < 150) return 'now';
+  return `-${(ms / 1000).toFixed(1)}s`;
 }
 
 export default function ReplayScrubber({ messages, toNodeId, graphRef, durationMs = 6000 }) {
@@ -151,59 +155,97 @@ export default function ReplayScrubber({ messages, toNodeId, graphRef, durationM
 
   const cycleSpeed = () => setSpeed((s) => SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length]);
 
-  const virtualMs = disabled ? NaN : t0 + progress * span;
+  const count = evs.length;
+  const spanSec = span / 1000;
+  const behindMs = disabled ? NaN : (1 - progress) * span;
+
+  // Not enough buffered traffic to replay — say so plainly instead of showing a
+  // dead widget with no explanation.
+  if (disabled) {
+    return (
+      <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-white/10 bg-surface-900/80 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
+        <History size={13} />
+        <span>Replay — waiting for buffered messages…</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="pointer-events-auto flex items-center gap-2.5 rounded-xl border border-white/10 bg-surface-900/80 px-2.5 py-1.5 backdrop-blur">
-      <button
-        onClick={playing ? pause : play}
-        disabled={disabled}
-        title={disabled ? 'Not enough buffered messages' : playing ? 'Pause' : 'Replay buffered activity'}
-        className="grid h-6 w-6 place-items-center rounded-lg bg-accent-500/20 text-accent-200 hover:bg-accent-500/30 disabled:opacity-40"
-      >
-        {playing ? <Pause size={13} /> : <Play size={13} />}
-      </button>
-
-      <div
-        ref={trackRef}
-        role="slider"
-        tabIndex={disabled ? -1 : 0}
-        aria-label="Replay position"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(progress * 100)}
-        aria-valuetext={fmtClock(virtualMs)}
-        onPointerDown={onTrackDown}
-        onPointerMove={onTrackMove}
-        onPointerUp={onTrackUp}
-        onKeyDown={onTrackKey}
-        className={clsxTrack(disabled)}
-      >
-        <div className="pointer-events-none absolute inset-y-0 left-0 my-auto h-1.5 rounded-full bg-white/10" style={{ width: '100%' }} />
-        <div className="pointer-events-none absolute inset-y-0 left-0 my-auto h-1.5 rounded-full bg-accent-500" style={{ width: `${progress * 100}%` }} />
-        <div
-          className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-300 shadow ring-2 ring-surface-900"
-          style={{ left: `${progress * 100}%` }}
-        />
+    <div className="pointer-events-auto w-[300px] rounded-xl border border-white/10 bg-surface-900/85 px-3 py-2 backdrop-blur">
+      {/* Header: name the control, state its scope, and flag when it's actively
+          driving the graph flashes (so replay reads distinct from live Flow). */}
+      <div className="mb-1.5 flex items-center gap-2">
+        <History size={13} className="text-accent-300" />
+        <span className="text-[11px] font-semibold text-slate-200">Replay</span>
+        <span className="text-[11px] text-slate-500">
+          last {count} msgs · {spanSec < 1 ? '<1' : Math.round(spanSec)}s
+        </span>
+        {playing && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-accent-300">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent-400" />
+            Replaying
+          </span>
+        )}
       </div>
 
-      <span className="w-[52px] text-center text-[11px] tabular-nums text-slate-400" title="Replayed clock time">
-        {fmtClock(virtualMs)}
-      </span>
+      <div className="flex items-center gap-2.5">
+        <button
+          onClick={playing ? pause : play}
+          title={playing ? 'Pause' : 'Replay the buffered traffic on the graph'}
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-accent-500/20 text-accent-200 hover:bg-accent-500/30"
+        >
+          {playing ? <Pause size={13} /> : <Play size={13} />}
+        </button>
 
-      <button
-        onClick={cycleSpeed}
-        disabled={disabled}
-        title="Playback speed"
-        className="flex items-center gap-1 rounded-lg border border-white/10 px-1.5 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200 disabled:opacity-40"
-      >
-        <Gauge size={12} />
-        {speed}×
-      </button>
+        <div className="flex flex-1 flex-col gap-0.5">
+          <div
+            ref={trackRef}
+            role="slider"
+            tabIndex={0}
+            aria-label="Replay position (oldest to now)"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress * 100)}
+            aria-valuetext={fmtBehind(behindMs)}
+            onPointerDown={onTrackDown}
+            onPointerMove={onTrackMove}
+            onPointerUp={onTrackUp}
+            onKeyDown={onTrackKey}
+            className={clsxTrack(false)}
+          >
+            <div className="pointer-events-none absolute inset-y-0 left-0 my-auto h-1.5 w-full rounded-full bg-white/10" />
+            <div className="pointer-events-none absolute inset-y-0 left-0 my-auto h-1.5 rounded-full bg-accent-500" style={{ width: `${progress * 100}%` }} />
+            <div
+              className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-300 shadow ring-2 ring-surface-900"
+              style={{ left: `${progress * 100}%` }}
+            />
+          </div>
+          <div className="flex justify-between px-0.5 text-[9px] uppercase tracking-wide text-slate-600">
+            <span>oldest</span>
+            <span>now</span>
+          </div>
+        </div>
 
-      <button onClick={reset} disabled={disabled} title="Reset to start" className="text-slate-400 hover:text-slate-200 disabled:opacity-40">
-        <RotateCcw size={13} />
-      </button>
+        <span
+          className="w-[42px] shrink-0 text-right text-[11px] tabular-nums text-slate-400"
+          title="Playhead position, relative to the newest buffered message"
+        >
+          {fmtBehind(behindMs)}
+        </span>
+
+        <button
+          onClick={cycleSpeed}
+          title="Playback speed"
+          className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-1.5 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200"
+        >
+          <Gauge size={12} />
+          {speed}×
+        </button>
+
+        <button onClick={reset} title="Reset to start" className="shrink-0 text-slate-400 hover:text-slate-200">
+          <RotateCcw size={13} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -212,7 +254,7 @@ export default function ReplayScrubber({ messages, toNodeId, graphRef, durationM
 // hit area, visible focus ring for keyboard users.
 function clsxTrack(disabled) {
   return [
-    'relative h-5 w-40 shrink-0 rounded-full',
+    'relative h-5 w-full rounded-full',
     disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60'
   ].join(' ');

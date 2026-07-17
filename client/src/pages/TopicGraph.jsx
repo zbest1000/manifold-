@@ -351,7 +351,7 @@ export default function TopicGraph() {
     });
   }, []);
 
-  const replayNodeId = useCallback((m) => `topic:${brokerId}:${m.topic}`, [brokerId]);
+  const replayNodeId = useCallback((m) => `topic:${m.brokerId || brokerId}:${m.topic}`, [brokerId]);
 
   // Frame the whole network when Show all is toggled on.
   useEffect(() => {

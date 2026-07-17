@@ -36,9 +36,23 @@ PR that closed them is noted inline.
   Expected (needs ≥2 samples, ~6s) but reads as broken on first paint. Consider a
   1-px baseline placeholder until the first two samples land.
 
-- [ ] **Replay scrubber tick marks.** The scrubber is now a real seek control
-  (drag/click to scrub, arrow keys, speed selector, clock readout, role=slider);
-  remaining polish is optional density tick marks on the track.
+- [ ] **Replay scrubber tick marks.** The scrubber is now a real, self-explanatory
+  seek control (title + scope, oldest→now track, relative readout, "Replaying"
+  indicator, arrow keys, speed selector, role=slider); remaining polish is
+  optional density tick marks on the track.
+
+- [ ] **Replay pulses vs live Flow are visually identical.** Both go through the
+  same `emitPulse` in `ForceGraph.jsx` (replay just passes `force=true`), so a
+  replayed burst flashes nodes exactly like live traffic. The new "Replaying"
+  indicator in the scrubber attributes it at the widget level, but the graph
+  pulses themselves aren't distinguished. Optional: give replay pulses a distinct
+  tint (e.g. accent-2) by threading a style flag through `pulseNode`/`emitPulse`.
+
+- [ ] **Replay only covers one broker in multi-broker mode.** `liveMsgs` is
+  buffered per `brokerId` (the first active broker), so with several brokers
+  selected the scrubber replays only the first one's traffic. `replayNodeId` is
+  now broker-aware, but the buffer feeding it isn't merged. Low priority (replay
+  is a single-broker inspection aid); revisit if multi-broker replay is wanted.
 
 - [ ] **Density/spacing audit tail.** Original QA flagged general density on
   UNS/Flows; revisit tile paddings and small-screen breakpoints once the bigger
@@ -60,7 +74,23 @@ PR that closed them is noted inline.
     merged graph, plus two new demo broker instances (North/South distinct data).
   - Beautify (2D): a real visual mode — node bloom + glowing links on the radial
     layout, not just a layout switch.
-  - Still open: 3D Activity (size by rate) and the replay redesign.
+  - Replay redesign: reframed the scrubber so it explains itself (title + scope
+    "last N msgs · Xs", relative "-6.4s → now" readout, oldest→now track labels,
+    a "Replaying" indicator while active) instead of an unlabelled media widget
+    with a meaningless absolute clock. See the dedicated entry below.
+  - Still open: 3D Activity (size by rate).
+- [x] **Replay "doesn't make sense" (redesign).** The scrubber worked mechanically
+  (seek/speed/keyboard) but read as an unlabelled media widget floating over the
+  graph: no title, no scope, and an absolute wall-clock readout (`14:32:07`) with
+  no reference point — plus its node-flashes were indistinguishable from live
+  Flow. Reframed it as a self-explanatory panel: a `History`-icon title, a scope
+  line ("last N msgs · Xs"), the track labelled oldest→now, a *relative* readout
+  ("-27s" counting up to "now"), a disabled "waiting for buffered messages…"
+  state, and a pulsing "Replaying" chip while active so the graph flashes are
+  attributable. Also made `replayNodeId` broker-aware. Verified live: play →
+  "Replaying" chip appears, playhead advances 0→34% (−27.0s→−18.0s). Two
+  follow-ups filed under Low (distinct replay pulse tint; multi-broker buffer).
+  (`components/ReplayScrubber.jsx`, `pages/TopicGraph.jsx`.)
 - [x] System health tile grid didn't scale: the Broker-ingest and Recorder
   sections rendered one tile per broker/recording in a flat grid with no cap,
   collapse, or filter, and the fixed process metrics scrolled away. Added a
