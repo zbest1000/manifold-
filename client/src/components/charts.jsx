@@ -148,6 +148,11 @@ export function TimeSeriesChart({ series = [], height = 260, colorFor, area, sho
     return [xsMs.map((t) => t / 1000), ...ys];
   }, [series]);
 
+  // Structural signature: the SET of series (tags + count), NOT their data. The
+  // chart is only rebuilt when this changes — live data updates flow through
+  // uPlot's setData (see UplotChart), so a 3s poll no longer destroys and
+  // recreates the chart (which flashed and reset any zoom).
+  const structKey = series.map((s) => s.tag || '').join('|');
   const options = useMemo(
     () => ({
       padding: [10, 14, 2, 2],
@@ -178,8 +183,9 @@ export function TimeSeriesChart({ series = [], height = 260, colorFor, area, sho
         }))
       ]
     }),
-    // colorFor is assumed stable; series identity drives structural rebuilds.
-    [series, useArea, showGrid] // eslint-disable-line react-hooks/exhaustive-deps
+    // Rebuild ONLY on a structural change (series added/removed, area/grid
+    // toggled) — never on new data points, which stream through setData.
+    [structKey, useArea, showGrid] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   if (!data[0] || data[0].length < 2) {
