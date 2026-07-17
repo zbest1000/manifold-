@@ -48,6 +48,21 @@ PR that closed them is noted inline.
 
 ### Low
 
+- [ ] **Demo-config gaps found in a full-UI sweep (not UI bugs; pages render
+  fine).** Discovery, CESMII, System/Health, and Settings were all real-click /
+  interaction tested and work. Observations worth a demo pass: (a) Discovery finds
+  the MQTT brokers + i3X mock but not the demo **OPC UA** server (the page claims
+  to probe for OPC UA — verify the 4840 probe reaches the `opcua` container).
+  (b) **CESMII isn't auto-connected** to its bundled mock (`cesmii-mock:4000`)
+  the way i3X is, so the page opens on an empty connect form; there's a real design
+  tension (JWT creds are intentionally not stored on disk), but the demo could at
+  least pre-fill the mock GraphQL endpoint. (c) **Historian outbox is spilling**
+  (System shows Written 0 / Spilled ~14 MB and climbing): the seeded "to timescale"
+  route targets a "Demo Timescale" historian, but no TimescaleDB is running in the
+  compose stack, so every write spills — either ship a Timescale service or drop
+  that seeded route. (d) Corroborates the built-in-historian-full item above
+  (System shows "Recorder · Built-in historian: 0 points").
+
 - [ ] **System "Process health" sparklines are blank right after a restart.**
   Expected (needs ≥2 samples, ~6s) but reads as broken on first paint. Consider a
   1-px baseline placeholder until the first two samples land.
