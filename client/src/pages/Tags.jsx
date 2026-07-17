@@ -64,31 +64,32 @@ export default function Tags() {
           <div className="flex items-center gap-2">
             <HelpButton title="What are Tags, and where do they come from?">
               <p>
-                A <b>tag</b> is a single named data point on a device — a sensor reading, a setpoint, a status. This page
-                browses the tags Manifold can already see across the drivers it speaks, so you can bind them into your
+                A <b>tag</b> is one named data point on a device, such as a sensor reading, a setpoint, or a status. This
+                page browses the tags Manifold can already see across the drivers it speaks, so you can bind them into your
                 Unified Namespace.
               </p>
-              <p>The <b>Source</b> dropdown picks where the tags come from:</p>
+              <p>The <b>Source</b> dropdown picks where the tags come from.</p>
               <ul className="list-disc space-y-1.5 pl-5">
                 <li>
-                  <b>OPC UA</b> — the address space of a connected OPC UA server (browse its folders/nodes). Connect one
-                  under <b>OPC UA</b> first.
+                  <b>OPC UA</b>: the address space of a connected OPC UA server. You browse its folders and nodes, for
+                  example <code>Objects/DeviceSet/Robot1/AxisTemp</code>. Connect a server under <b>OPC UA</b> first.
                 </li>
                 <li>
-                  <b>Sparkplug</b> — the metrics of a device seen in a broker's Sparkplug B traffic (Group → Edge Node →
-                  Device → metric), learned from BIRTH certificates.
+                  <b>Sparkplug</b>: the metrics of a device seen in a broker&apos;s Sparkplug B traffic, arranged as Group,
+                  Edge Node, Device, metric. These are learned from the device&apos;s BIRTH certificate.
                 </li>
                 <li>
-                  <b>MQTT</b> — the plain topic tree observed on a broker, treated as tags.
+                  <b>MQTT</b>: the plain topic tree observed on a broker, treated as tags.
                 </li>
               </ul>
               <p>
-                Tick the tags you want, then <b>Add to UNS</b> to create a <b>binding</b>: Manifold subscribes/monitors those
-                tags and republishes them into your namespace (as plain values, a TVQ envelope, or a Sparkplug B device),
-                with deadband and quality mapping. Bindings are <b>read-only toward devices</b> — nothing here writes back.
+                Tick the tags you want, then press <b>Add to UNS</b> to create a <b>binding</b>. Manifold monitors those tags
+                and republishes them into your namespace as plain values, a TVQ envelope, or a Sparkplug B device, with
+                deadband and quality mapping. Bindings are <b>read-only toward devices</b>. Nothing here writes back to the
+                source.
               </p>
               <p className="text-slate-400">
-                No sources listed? Connect a broker (MQTT/Sparkplug) or an OPC UA server first — tags are discovered from
+                No sources listed? Connect a broker (MQTT or Sparkplug) or an OPC UA server first. Tags are discovered from
                 live connections, not configured by hand.
               </p>
             </HelpButton>

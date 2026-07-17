@@ -45,6 +45,16 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] UNS "Mounts" panel only listed OPC UA / i3X, so MQTT and Sparkplug looked
+  like they weren't UNS sources. Reworked into a "UNS sources" panel that shows
+  Live sources (MQTT brokers, Sparkplug decoded within them) alongside Mounted
+  sources (OPC UA, i3X), and explains how they connect (one namespace; bridge
+  values with a Pipeline route or Tag binding).
+- [x] Expanded in-app help with concrete examples and plainer wording (no
+  em-dashes, no filler): richer Pipelines help; added help to UNS topology,
+  Trends, and UNS sources; tightened Tags help.
+
+
 - [x] Charts flashing / resetting every data tick — memoize uPlot options on a
   structural key so live data flows through `setData` (PR #43).
 - [x] Health-metric popup see-through / trapped under cards — `createPortal`

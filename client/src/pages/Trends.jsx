@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { useStore } from '@/store/store';
 import PageHeader from '@/components/PageHeader';
 import TrendChart, { seriesColor } from '@/components/TrendChart';
-import { Card, Button, Input, Field, EmptyState } from '@/components/ui';
+import { Card, Button, Input, Field, EmptyState, HelpButton } from '@/components/ui';
 
 /**
  * Trends — chart time-series from three sources: a historian, a local file
@@ -214,6 +214,32 @@ export default function Trends() {
         subtitle="chart live from the message stream, a historian, or a local recording"
         actions={
           <div className="flex items-center gap-2">
+            <HelpButton title="How Trends works" label="How Trends works">
+              <p>Trends charts numeric values over time. Pick a source, add up to ten tags, and choose a range.</p>
+              <p>Three sources:</p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>
+                  <b>Live</b>: reads straight from a broker&apos;s recent message stream, held in memory. No historian needed.
+                  Type a topic path such as <code>energy/main/voltage</code> and press Enter. Turn on <b>Auto 30s</b> to keep
+                  it updating.
+                </li>
+                <li>
+                  <b>Historian</b>: reads back from a time-series database you set up under Pipelines, over any range. Search
+                  pulls tag names straight from the historian.
+                </li>
+                <li>
+                  <b>Recording</b>: replays a file captured by the Recorder.
+                </li>
+              </ul>
+              <p>
+                Only numeric values plot. A payload like <code>{'{ value: 401, unit: "V" }'}</code> charts its
+                <code>value</code>; plain numbers chart directly; text is skipped. Hover the chart for the value at a point.
+              </p>
+              <p className="text-slate-400">
+                Nothing to chart? On Live, make sure the broker is publishing numbers to the topic you typed. On Historian,
+                make sure a Pipeline route is writing to it.
+              </p>
+            </HelpButton>
             <Button
               variant={autoRefresh ? 'primary' : 'outline'}
               size="sm"

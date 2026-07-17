@@ -14,7 +14,7 @@ import { resolveIconName, getIconImage } from '@/graph/unsIcons';
 import PageHeader from '@/components/PageHeader';
 import GraphTree from '@/components/GraphTree';
 import ViewTab from '@/components/ViewTab';
-import { Button, EmptyState } from '@/components/ui';
+import { Button, EmptyState, HelpButton } from '@/components/ui';
 import { formatDistanceToNow } from 'date-fns';
 
 // Icon picker pulls the full Lucide set — its own chunk, loaded on demand.
@@ -201,6 +201,34 @@ export default function Uns() {
         subtitle="live topology"
         actions={
           <div className="flex items-center gap-2">
+            <HelpButton title="How the Unified Namespace view works" label="How this view works">
+              <p>
+                This view maps every connected source into one live namespace, laid out as an ISA-95 hierarchy: Enterprise,
+                Site, Area, Line, Cell, and so on down to individual tags. Each broker becomes a tree, and mounted sources
+                (OPC UA, i3X) sit beside them.
+              </p>
+              <p>Two ways to look at it:</p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li><b>Topology</b>: the graph. Nodes are badges, edges show the parent-child path.</li>
+                <li><b>Tree</b>: the same namespace as a searchable, collapsible list.</li>
+              </ul>
+              <p>Reading the topology:</p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>An edge turns <b className="text-emerald-400">green and animated</b> while data is flowing through that branch, and fades to gray when it goes quiet.</li>
+                <li>A leaf carries a status dot: <b className="text-emerald-400">green</b> is publishing now, <b className="text-amber-400">amber</b> is overdue (silent about 3x its usual interval), <b className="text-rose-400">red</b> is dead (about 10x).</li>
+                <li>A leaf&apos;s latest value is printed under its name, so the map doubles as a live dashboard.</li>
+              </ul>
+              <p>Getting around:</p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>Click a node to open its detail. Double-click, or click the <b>+ / -</b> badge, to expand or collapse.</li>
+                <li>Drag a node to move it; it stays where you drop it. Ctrl or Cmd-click several nodes, or shift-drag a box, to move a group together. <b>Auto arrange</b> resets the layout, <b>Fit</b> re-frames it.</li>
+              </ul>
+              <p className="text-slate-400">
+                The buttons up top: <b>Lint</b> checks the namespace for structural problems and jumps you to each one.
+                <b> Events</b> is a live feed of new topics and Sparkplug births and deaths. <b>Levels</b> renames the ISA-95
+                tiers. <b>Mounts</b> grafts in OPC UA and i3X sources.
+              </p>
+            </HelpButton>
             <div className="flex overflow-hidden rounded-xl border border-white/10">
               <ViewTab active={view === 'topology'} onClick={() => setView('topology')} icon={Share2} label="Topology" />
               <ViewTab active={view === 'tree'} onClick={() => setView('tree')} icon={ListTree} label="Tree" />
@@ -218,7 +246,7 @@ export default function Uns() {
               onClick={() => setPanel((p) => (p === 'events' ? null : 'events'))}
             />
             <HeaderButton icon={Layers} label="Levels" active={levelsOpen} onClick={() => setLevelsOpen((v) => !v)} />
-            <HeaderButton icon={Plug} label="Mounts" active={mountsOpen} onClick={() => setMountsOpen((v) => !v)} />
+            <HeaderButton icon={Plug} label="Sources" active={mountsOpen} onClick={() => setMountsOpen((v) => !v)} />
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value)}
@@ -264,6 +292,7 @@ export default function Uns() {
         {mountsOpen && (
           <MountManager
             mounts={mounts}
+            brokers={connected}
             opcua={opcua}
             i3xStatus={i3xStatus}
             onChanged={() => setMountTick((v) => v + 1)}
@@ -450,7 +479,7 @@ function LevelsEditor({ levels, onSave, onClose }) {
 
 // ---- Mount manager -------------------------------------------------------------
 
-function MountManager({ mounts, opcua, i3xStatus, onChanged, onClose }) {
+function MountManager({ mounts, brokers = [], opcua, i3xStatus, onChanged, onClose }) {
   const [type, setType] = useState('opcua');
   const [connectionId, setConnectionId] = useState('');
   const [label, setLabel] = useState('');
@@ -482,8 +511,44 @@ function MountManager({ mounts, opcua, i3xStatus, onChanged, onClose }) {
   return (
     <div className="absolute right-4 top-4 z-20 w-80 rounded-xl border border-white/10 bg-surface-900/95 p-3 shadow-xl backdrop-blur">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-100">Mounted sources</span>
+        <span className="text-sm font-semibold text-slate-100">UNS sources</span>
         <span className="flex items-center gap-1">
+          <HelpButton title="What feeds the Unified Namespace?" label="About UNS sources">
+            <p>
+              The namespace is one shared tree that several sources feed at once. They fall into two groups.
+            </p>
+            <p><b>Live sources</b> stream real values into the namespace:</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <b>MQTT</b>: every connected broker&apos;s topic tree shows up as a live branch. This is the backbone of the
+                namespace, so brokers are always here. You add and remove them on the <b>MQTT Brokers</b> page.
+              </li>
+              <li>
+                <b>Sparkplug</b>: when a broker carries Sparkplug B traffic, Manifold decodes it automatically and shows the
+                Group, Edge Node, Device, and metric structure inside that broker&apos;s branch. It is not a separate
+                connection.
+              </li>
+            </ul>
+            <p><b>Mounted sources</b> graft in <b>structure only</b>. They map out what exists but do not stream values:</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <b>OPC UA</b>: a server&apos;s address space, browsed like an OPC UA client would show it, for example
+                <code>Objects/DeviceSet/Robot1</code>.
+              </li>
+              <li>
+                <b>i3X</b>: the connected i3X object graph, as one branch.
+              </li>
+            </ul>
+            <p>
+              <b>How they connect.</b> Every source lands in the same ISA-95 hierarchy, side by side, so you see the whole
+              plant in one place. To carry a value from one source into another, build a <b>Pipeline</b> route or a <b>Tag</b>
+              binding. For example, mount an OPC UA server to find the node you want, then route it into
+              <code>uns/plant1/line1</code> on your broker so it becomes a live topic that others can subscribe to.
+            </p>
+            <p className="text-slate-400">
+              Mounted sources re-browse every 60 seconds. Press <b>Refresh</b> to update now.
+            </p>
+          </HelpButton>
           <button
             onClick={onChanged}
             title="Re-browse mounted sources now (also refreshes every 60s)"
@@ -496,10 +561,33 @@ function MountManager({ mounts, opcua, i3xStatus, onChanged, onClose }) {
           </button>
         </span>
       </div>
-      <p className="mb-2 text-[11px] text-slate-500">
-        Graft OPC UA address spaces and the i3X object graph into the namespace forest. Structure only — mounted nodes
-        don't stream values.
+      <p className="mb-2 text-[11px] leading-snug text-slate-500">
+        Everything below feeds one namespace. MQTT brokers (and any Sparkplug traffic on them) stream live; OPC UA and
+        i3X graft in structure only. To carry values across sources, use a Pipeline route or a Tag binding.
       </p>
+
+      {/* Live sources: MQTT brokers (Sparkplug is decoded within them) — managed on the Brokers page */}
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Live sources</p>
+      <div className="mb-3 space-y-1">
+        {brokers.length === 0 ? (
+          <p className="text-[11px] text-slate-500">
+            No brokers connected. Add one on the <b className="text-slate-400">MQTT Brokers</b> page.
+          </p>
+        ) : (
+          brokers.map((b) => (
+            <div key={b.id} className="flex items-center justify-between rounded-lg bg-black/20 px-2 py-1.5 text-xs">
+              <span className="truncate text-slate-300">
+                <span className="mr-1.5 rounded bg-emerald-500/15 px-1 py-0.5 font-mono text-[10px] uppercase text-emerald-300">mqtt</span>
+                {b.name || `${b.host}:${b.port}`}
+              </span>
+              <span className="text-[10px] text-emerald-400">live</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Mounted sources: OPC UA / i3X, structure only */}
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Mounted sources</p>
       {mounts.length > 0 && (
         <div className="mb-2 space-y-1">
           {mounts.map((m) => (
