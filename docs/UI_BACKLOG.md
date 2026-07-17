@@ -29,15 +29,20 @@ PR that closed them is noted inline.
   the way i3X is, so the page opens on an empty connect form; there's a real design
   tension (JWT creds are intentionally not stored on disk), but the demo could at
   least pre-fill the mock GraphQL endpoint. (c) **Historian outbox is spilling**
-  (System shows Written 0 / Spilled ~14 MB and climbing): the seeded "to timescale"
-  route targets a "Demo Timescale" historian, but no TimescaleDB is running in the
-  compose stack, so every write spills — either ship a Timescale service or drop
-  that seeded route. (d) Corroborates the built-in-historian-full item above
+  (System shows Written 0 / Spilled ~18 MB and climbing) — but this is NOT a
+  demo-seed bug: the seed only defines the file-based `demo-historian`, no
+  Timescale route. The spilling "Demo Timescale" route is stale *runtime* state in
+  this instance's `/data` volume from a prior TimescaleDB experiment; a fresh demo
+  has no such route. If unwanted, delete the "Demo Timescale" route/historian in
+  the running instance (kept as-is here since it's persisted state I didn't clearly
+  create). (d) Corroborates the built-in-historian-full item above
   (System shows "Recorder · Built-in historian: 0 points").
 
-- [ ] **System "Process health" sparklines are blank right after a restart.**
-  Expected (needs ≥2 samples, ~6s) but reads as broken on first paint. Consider a
-  1-px baseline placeholder until the first two samples land.
+- [x] **System sparklines were blank until 2 samples landed.** `Sparkline`
+  returned an empty div when it had `< 2` numeric samples (right after a restart,
+  or for a metric that hasn't ticked), so a stat tile read as broken on first
+  paint. Now renders a faint 1-px baseline (`withAlpha(color, 0.2)`) instead.
+  Verified live on the System page. (`components/charts.jsx`.)
 
 - [ ] **Replay scrubber tick marks.** The scrubber is now a real, self-explanatory
   seek control (title + scope, oldest→now track, relative readout, "Replaying"
