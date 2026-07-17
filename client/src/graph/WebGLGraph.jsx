@@ -338,13 +338,25 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
       transformRef.current.y += dy;
       drawRef.current();
     };
+    // `moved` accumulates dpr-scaled deltas, so the click threshold must be
+    // dpr-scaled too (a bare 6 misreads a tiny twitch as a drag on HiDPI).
+    const clickThreshold = () => 6 * (window.devicePixelRatio || 1);
     const onUp = (e) => {
-      if (dragging && moved < 6) {
+      if (dragging && moved < clickThreshold()) {
         const { x, y } = toGraph(e.clientX, e.clientY);
         const hit = pickFromGrid(x, y, gridRef.current);
         if (hit && cbRef.current.onSelect) cbRef.current.onSelect(hit);
       }
       dragging = false;
+    };
+    // Right-click a node to open its properties (suppress the native menu).
+    const onContext = (e) => {
+      const { x, y } = toGraph(e.clientX, e.clientY);
+      const hit = pickFromGrid(x, y, gridRef.current);
+      if (hit) {
+        e.preventDefault();
+        cbRef.current.onSelect?.(hit);
+      }
     };
     const onWheel = (e) => {
       e.preventDefault();
@@ -366,12 +378,14 @@ export default function WebGLGraph({ data, styleId = 'constellation', selectedId
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', onContext);
     return () => {
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('contextmenu', onContext);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

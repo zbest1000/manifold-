@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2 } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -20,8 +20,8 @@ function RendererLoading() {
     </div>
   );
 }
-import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
-import { DEFAULT_LAYOUT } from '@/graph/graphStyles';
+import { buildMqttGraph, collapseGraph, groupColor, GROUP_ORDER } from '@/graph/buildGraph';
+import { DEFAULT_LAYOUT, DEFAULT_STYLE, GRAPH_STYLES } from '@/graph/graphStyles';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
@@ -167,6 +167,8 @@ export default function TopicGraph() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fullGraph, collapseKey]
   );
+  // Groups actually present, for the color legend.
+  const groupsPresent = useMemo(() => new Set(graph.nodes.map((n) => n.group)), [graph]);
 
   // "Show coverage on topic map" from the Flows view: jump to the graph so the
   // painted trail is immediately visible.
@@ -381,6 +383,7 @@ export default function TopicGraph() {
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate. Scroll to zoom. Click a node for details. The style dropdown up top restyles this view too.
             </div>
+            <GraphLegend styleId={graphStyle} groups={groupsPresent} />
           </div>
         ) : (
           <div className="relative flex-1">
@@ -419,6 +422,7 @@ export default function TopicGraph() {
                 minimap={showMinimap}
               />
             )}
+            <GraphLegend styleId={graphStyle} groups={groupsPresent} />
             {coverage?.brokerId === brokerId && !showAll && (
               // Coverage paint handed over from the Flows view: the highlighted
               // trail is exactly what the chosen client actually receives.
@@ -544,6 +548,48 @@ function SegBtn({ active, onClick, disabled, title, children }) {
     >
       {children}
     </button>
+  );
+}
+
+// Human-readable names for the node groups that carry color meaning.
+const GROUP_LABELS = {
+  broker: 'Broker',
+  server: 'Server',
+  topic: 'Branch',
+  telemetry: 'Telemetry',
+  data: 'Data',
+  command: 'Command',
+  config: 'Config',
+  alarm: 'Alarm',
+  sparkplug: 'Sparkplug'
+};
+
+// Collapsible legend that decodes node color → group for the active style. Only
+// lists groups actually present in the current graph.
+function GraphLegend({ styleId, groups }) {
+  const [open, setOpen] = useState(true);
+  const palette = (GRAPH_STYLES[styleId] || GRAPH_STYLES[DEFAULT_STYLE])?.palette || [];
+  const present = GROUP_ORDER.filter((g) => groups.has(g));
+  if (present.length === 0) return null;
+  return (
+    <div className="pointer-events-auto absolute bottom-4 right-4 z-10 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-slate-300 backdrop-blur">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-slate-400 transition hover:text-slate-200"
+      >
+        Legend {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+      </button>
+      {open && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-white/5 px-3 py-2">
+          {present.map((g) => (
+            <span key={g} className="flex items-center gap-1.5 text-[11px]">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: groupColor(g, palette) }} />
+              {GROUP_LABELS[g] || g}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

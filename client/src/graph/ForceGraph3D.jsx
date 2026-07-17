@@ -240,10 +240,20 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       requestRender(true);
     };
     canvas.style.cursor = 'grab';
+    // Right-click a node to open its properties (suppress the native menu).
+    const onContext = (e) => {
+      const node = pick(e);
+      if (node && onSelectRef.current) {
+        e.preventDefault();
+        onSelectRef.current(node);
+      }
+    };
+
     canvas.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('contextmenu', onContext);
 
     threeRef.current = { renderer, scene, camera, rotGroup, requestRender };
     requestRender();
@@ -256,6 +266,7 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('contextmenu', onContext);
       threeRef.current = null;
       renderer.dispose();
     };

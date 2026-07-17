@@ -699,10 +699,21 @@ const ForceGraph = forwardRef(function ForceGraph(
       }
     };
 
+    // Right-click a node to open its properties (suppress the native menu).
+    const onContext = (e) => {
+      const { x, y } = toGraphCoords(e);
+      const hit = pick(x, y);
+      if (hit) {
+        e.preventDefault();
+        cbRef.current.onSelect?.(hit);
+      }
+    };
+
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointerup', onUp);
     canvas.addEventListener('dblclick', onDblClick);
     canvas.addEventListener('pointermove', onMove);
+    canvas.addEventListener('contextmenu', onContext);
 
     return () => {
       ro.disconnect();
@@ -710,6 +721,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('pointermove', onMove);
+      canvas.removeEventListener('contextmenu', onContext);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -244,7 +244,7 @@ function RoutesTab({ brokers }) {
                   <Pencil size={13} />
                 </button>
                 <button
-                  onClick={() => api.deletePipeline(route.id).then(load)}
+                  onClick={() => window.confirm(`Delete route "${route.name || route.id}"? It stops routing immediately.`) && api.deletePipeline(route.id).then(load)}
                   title="Delete route"
                   className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300"
                 >
@@ -506,7 +506,7 @@ function ModelsTab({ brokers }) {
                 >
                   <Pencil size={13} />
                 </button>
-                <button onClick={() => api.deleteModel(m.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
+                <button onClick={() => window.confirm(`Delete model "${m.name || m.id}"?`) && api.deleteModel(m.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                   <Trash2 size={13} />
                 </button>
               </div>
@@ -695,7 +695,7 @@ function HistoriansTab() {
               <button onClick={() => edit(h)} title="Edit historian" className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-accent-400">
                 <Pencil size={13} />
               </button>
-              <button onClick={() => api.deleteHistorian(h.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
+              <button onClick={() => window.confirm(`Remove historian "${h.name || h.url}"?\n\nThis deletes the stored connection, including its credentials. Data already written to the database is not affected.`) && api.deleteHistorian(h.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                 <Trash2 size={13} />
               </button>
             </div>
@@ -933,7 +933,7 @@ function RecorderTab({ brokers }) {
                   </Button>
                 </>
               )}
-              <button onClick={() => api.deleteRecording(rec.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
+              <button onClick={() => window.confirm(`Delete recording "${rec.name || rec.id}"?\n\nThe captured data file is discarded and cannot be recovered.`) && api.deleteRecording(rec.id).then(load)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                 <Trash2 size={13} />
               </button>
             </div>
@@ -1059,7 +1059,7 @@ function ContractsTab({ brokers }) {
                   {brokerName(brokers, c.brokerId)} · {c.filter} · {k.checked || 0} checked · locked {c.lockedAt ? formatDistanceToNow(new Date(c.lockedAt), { addSuffix: true }) : ''}
                 </p>
               </div>
-              <button onClick={() => api.deleteContract(c.id).then(load)} className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
+              <button onClick={() => window.confirm(`Delete the contract for "${c.filter || c.id}"?`) && api.deleteContract(c.id).then(load)} className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-rose-300">
                 <Trash2 size={13} />
               </button>
             </div>
