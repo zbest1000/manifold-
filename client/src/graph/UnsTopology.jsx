@@ -143,8 +143,9 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
   const sizeRef = useRef({ w: 0, h: 0 });
   const transformRef = useRef({ x: 130, y: 60, k: 1 });
   const visibleRef = useRef([]); // laid-out visible nodes for hit-testing
-  // Manual drag offsets on top of the computed layout, keyed `${brokerId}:${path}`.
-  // They survive expand/collapse relayouts; "Auto arrange" clears them.
+  // Absolute world positions for nodes the user has dragged, keyed
+  // `${brokerId}:${path}`. Pins override the tidy layout and survive every
+  // relayout; "Auto arrange" clears them.
   const manualRef = useRef(new Map());
   // Set once the user takes control of the camera (pan / zoom / drag / toggle).
   // Until then the view auto-frames the whole forest as it loads and grows.
@@ -160,10 +161,14 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
 
-  // Final position of a laid node = tidy-layout position + any manual offset.
+  // A moved node is PINNED to an absolute world position, not offset from the
+  // tidy layout: live sources (an OPC-UA mount, streaming topics) rebuild the
+  // forest constantly, and an offset-from-base would drift every time the base
+  // recomputed — the node "fighting" the drag. An absolute pin stays exactly
+  // where dropped until "Auto arrange" clears it.
   const posOf = useCallback((l) => {
-    const off = manualRef.current.get(`${l.node.brokerId}:${l.node.path}`);
-    return off ? { x: l.x + off.dx, y: l.y + off.dy } : { x: l.x, y: l.y };
+    const pin = manualRef.current.get(`${l.node.brokerId}:${l.node.path}`);
+    return pin ? { x: pin.x, y: pin.y } : { x: l.x, y: l.y };
   }, []);
 
   // Fit the whole visible arrangement (including label blocks) into the viewport.
@@ -653,6 +658,7 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
     const keyOf = (l) => `${l.node.brokerId}:${l.node.path}`;
     const onDown = (e) => {
       interactAt.current = Date.now();
+      userMovedRef.current = true; // any canvas interaction hands the camera to the user
       moved = 0;
       ctrlToggled = false;
       last = { x: e.clientX, y: e.clientY };
@@ -706,8 +712,15 @@ export default function UnsTopology({ roots, levels = DEFAULT_LEVELS, selectedId
         // otherwise just this node.
         const keys = selRef.current.has(gkey) && selRef.current.size > 1 ? [...selRef.current] : [gkey];
         for (const key of keys) {
-          const off = manualRef.current.get(key) || { dx: 0, dy: 0 };
-          manualRef.current.set(key, { dx: off.dx + dx / k, dy: off.dy + dy / k });
+          // Absolute pin: seed from the current tidy position on the first move,
+          // then track the cursor. (See posOf — pins don't drift with re-layout.)
+          let cur = manualRef.current.get(key);
+          if (!cur) {
+            const laid = visibleRef.current.find((l) => keyOf(l) === key);
+            if (!laid) continue;
+            cur = { x: laid.x, y: laid.y };
+          }
+          manualRef.current.set(key, { x: cur.x + dx / k, y: cur.y + dy / k });
         }
         canvas.style.cursor = 'grabbing';
       }
