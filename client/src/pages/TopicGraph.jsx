@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, ChevronDown, ChevronUp, Sparkles, RotateCw, PanelRight } from 'lucide-react';
+import { Share2, X, Gauge, Clock, Hash, Send, ListTree, Search, Copy, Trash2, Boxes, Box, Tag, Waypoints, Loader2, Cpu, GitCompareArrows, Maximize2, Minimize2, PanelRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { useStore, onMessageActivity } from '@/store/store';
@@ -24,6 +24,7 @@ import { buildMqttGraph, collapseGraph } from '@/graph/buildGraph';
 import { DEFAULT_LAYOUT } from '@/graph/graphStyles';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphLegend from '@/components/GraphLegend';
+import Graph3DControls from '@/components/Graph3DControls';
 import GraphSearch from '@/components/GraphSearch';
 import ReplayScrubber from '@/components/ReplayScrubber';
 import TopicTree from '@/components/TopicTree';
@@ -93,6 +94,8 @@ export default function TopicGraph() {
   const [autoRotate3d, setAutoRotate3d] = useState(false);
   const [beautify3d, setBeautify3d] = useState(false);
   const FORCE_MAX = 30000; // force-layout worker node cap
+  const COLLAPSE_SEED_THRESHOLD = 200; // above this many nodes, open collapsed
+  const COLLAPSE_SEED_DEPTH = 2; // keep the top N levels expanded on load
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
 
@@ -181,6 +184,45 @@ export default function TopicGraph() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [fullGraph, collapseKey]
   );
+
+  // Big brokers (hundreds of topics) render as an unreadable wall — worst in the
+  // tree layout, where a thousand leaves fit to a flat horizontal line and no
+  // node is clickable. Seed a collapsed view (top few levels only) once per
+  // broker so the graph opens clean and navigable, like the i3X object tree;
+  // double-click a branch to expand. Runs when the graph first grows past the
+  // threshold, and never fights a manual expand (seeded once per broker id).
+  const seededBrokerRef = useRef(null);
+  useEffect(() => {
+    if (!broker || seededBrokerRef.current === broker.id) return;
+    if (fullGraph.nodes.length <= COLLAPSE_SEED_THRESHOLD) return; // revisit as topics stream in
+    const childrenOf = new Map();
+    const incoming = new Set();
+    for (const l of fullGraph.links) {
+      const s = endId(l.source);
+      const t = endId(l.target);
+      if (!childrenOf.has(s)) childrenOf.set(s, []);
+      childrenOf.get(s).push(t);
+      incoming.add(t);
+    }
+    const depth = new Map();
+    const queue = fullGraph.nodes.filter((n) => !incoming.has(n.id)).map((n) => (depth.set(n.id, 0), [n.id, 0]));
+    while (queue.length) {
+      const [id, d] = queue.shift();
+      for (const c of childrenOf.get(id) || []) {
+        if (!depth.has(c)) {
+          depth.set(c, d + 1);
+          queue.push([c, d + 1]);
+        }
+      }
+    }
+    const seed = new Set();
+    for (const n of fullGraph.nodes) {
+      if ((depth.get(n.id) ?? 0) >= COLLAPSE_SEED_DEPTH && childrenOf.get(n.id)?.length) seed.add(n.id);
+    }
+    seededBrokerRef.current = broker.id;
+    if (seed.size) setCollapsed(seed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [broker?.id, fullGraph]);
   // Groups actually present, for the color legend.
   const groupsPresent = useMemo(() => new Set(graph.nodes.map((n) => n.group)), [graph]);
 
@@ -601,60 +643,8 @@ function SegBtn({ active, onClick, disabled, title, children }) {
   );
 }
 
-// Legend + group labels now live in components/GraphLegend.jsx (shared).
-
-// Look-and-feel controls for the 3D view (Beautify + auto-rotate + size/link sliders).
-function Graph3DControls({ beautify, onBeautify, autoRotate, onAutoRotate, nodeScale, onNodeScale, linkOpacity, onLinkOpacity }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="absolute left-4 top-4 z-10 w-52 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-slate-300 backdrop-blur">
-      <div className="flex items-stretch">
-        <button
-          onClick={onBeautify}
-          title="Depth-graded colours, glowing links, and a slow spin"
-          className={clsx(
-            'flex flex-1 items-center gap-1.5 px-3 py-2 text-sm font-medium transition',
-            beautify ? 'bg-accent-500/20 text-accent-200' : 'text-slate-300 hover:text-slate-100'
-          )}
-        >
-          <Sparkles size={15} className={beautify ? 'text-accent-300' : ''} /> Beautify
-        </button>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          title="Look and feel"
-          className="border-l border-white/10 px-2.5 text-slate-400 transition hover:text-slate-200"
-        >
-          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-      </div>
-      {open && (
-        <div className="space-y-3 border-t border-white/5 px-3 py-3">
-          <button
-            onClick={onAutoRotate}
-            className={clsx(
-              'flex w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
-              autoRotate ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
-            )}
-          >
-            <RotateCw size={13} className={autoRotate ? 'text-accent-300' : ''} /> Auto-rotate
-          </button>
-          <label className="block">
-            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
-              Node size <span className="tabular-nums text-slate-500">{nodeScale.toFixed(1)}×</span>
-            </span>
-            <input type="range" min="0.5" max="2" step="0.1" value={nodeScale} onChange={(e) => onNodeScale(Number(e.target.value))} className="w-full accent-accent-500" />
-          </label>
-          <label className="block">
-            <span className="mb-1 flex justify-between text-[11px] text-slate-400">
-              Links <span className="tabular-nums text-slate-500">{Math.round(linkOpacity * 100)}%</span>
-            </span>
-            <input type="range" min="0.05" max="0.8" step="0.05" value={linkOpacity} onChange={(e) => onLinkOpacity(Number(e.target.value))} className="w-full accent-accent-500" />
-          </label>
-        </div>
-      )}
-    </div>
-  );
-}
+// Legend + group labels live in components/GraphLegend.jsx; the 3D look-and-feel
+// controls live in components/Graph3DControls.jsx (both shared across views).
 
 // Resolve a link endpoint whether it's still an id string or a d3-mutated node object.
 const endId = (e) => (e && typeof e === 'object' ? e.id : e);

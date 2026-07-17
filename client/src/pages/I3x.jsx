@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search, Box } from 'lucide-react';
+import { Boxes, Plug, LogOut, X, Activity, Layers, ListTree, Search, Box, Maximize2, PanelRight } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { api } from '@/lib/api';
@@ -8,6 +8,7 @@ import ForceGraph3D from '@/graph/ForceGraph3D';
 import { buildI3xGraph } from '@/graph/buildGraph';
 import GraphToolbar from '@/components/GraphToolbar';
 import GraphLegend from '@/components/GraphLegend';
+import Graph3DControls from '@/components/Graph3DControls';
 import GraphSearch from '@/components/GraphSearch';
 import GraphTree from '@/components/GraphTree';
 import JsonView from '@/components/JsonView';
@@ -29,6 +30,12 @@ export default function I3x() {
   const [treeFilter, setTreeFilter] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
   const graphRef = useRef(null);
+  const graph3dRef = useRef(null);
+  // 3D look-and-feel controls (shared component, local state per view).
+  const [nodeScale3d, setNodeScale3d] = useState(1);
+  const [linkOpacity3d, setLinkOpacity3d] = useState(0.35);
+  const [autoRotate3d, setAutoRotate3d] = useState(false);
+  const [beautify3d, setBeautify3d] = useState(false);
 
   // Selecting a node opens its details; the Properties toolbar button reopens it.
   const selectNode = (n) => {
@@ -172,7 +179,51 @@ export default function I3x() {
           </div>
         ) : view === '3d' ? (
           <div className="relative flex-1">
-            <ForceGraph3D data={graph} styleId={graphStyle} selectedId={selected?.id || null} onSelect={selectNode} />
+            <ForceGraph3D
+              ref={graph3dRef}
+              data={graph}
+              styleId={graphStyle}
+              selectedId={selected?.id || null}
+              onSelect={selectNode}
+              nodeScale={nodeScale3d}
+              linkOpacity={linkOpacity3d}
+              autoRotate={autoRotate3d}
+              beautify={beautify3d}
+            />
+            <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+              <button
+                onClick={() => selected?.kind === 'i3x-object' && setPanelOpen(true)}
+                disabled={selected?.kind !== 'i3x-object'}
+                title={selected?.kind === 'i3x-object' ? 'Show properties of the selected object' : 'Select an object first'}
+                className={clsx(
+                  'flex items-center gap-1.5 rounded-xl border px-2.5 py-2 text-sm backdrop-blur transition',
+                  selected?.kind === 'i3x-object'
+                    ? 'border-white/10 bg-surface-900/80 text-slate-300 hover:border-white/20 hover:text-slate-100'
+                    : 'cursor-not-allowed border-white/5 bg-surface-900/60 text-slate-600'
+                )}
+              >
+                <PanelRight size={15} />
+                <span className="hidden font-medium sm:inline">Properties</span>
+              </button>
+              <button
+                onClick={() => graph3dRef.current?.resetView()}
+                title="Reset the camera to the default angle and zoom"
+                className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-surface-900/80 px-2.5 py-2 text-sm text-slate-300 backdrop-blur transition hover:border-white/20 hover:text-slate-100"
+              >
+                <Maximize2 size={15} />
+                <span className="hidden font-medium sm:inline">Reset view</span>
+              </button>
+            </div>
+            <Graph3DControls
+              beautify={beautify3d}
+              onBeautify={() => setBeautify3d((v) => !v)}
+              autoRotate={autoRotate3d}
+              onAutoRotate={() => setAutoRotate3d((v) => !v)}
+              nodeScale={nodeScale3d}
+              onNodeScale={setNodeScale3d}
+              linkOpacity={linkOpacity3d}
+              onLinkOpacity={setLinkOpacity3d}
+            />
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate · scroll to zoom · click a node for details
             </div>
@@ -191,6 +242,7 @@ export default function I3x() {
                   onExportJson={() => downloadJson(graphRef.current?.exportGraph(), 'i3x-graph.json')}
                   layoutValue={graphLayout}
                   onLayoutChange={setGraphLayout}
+                  onBeautify={() => setGraphLayout(graphLayout === 'radial' ? 'tree' : 'radial')}
                   onProperties={() => setPanelOpen(true)}
                   hasSelection={selected?.kind === 'i3x-object'}
                 />
