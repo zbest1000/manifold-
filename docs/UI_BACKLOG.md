@@ -110,6 +110,15 @@ PR that closed them is noted inline.
     drifts nodes out from under the click). No other selection path was broken;
     d3-drag was the sole defect. OPC UA uses the same `ForceGraph`, so it inherits
     the fix.
+  - Durable deploy: earlier fixes were hot-copied into the running container
+    (`docker cp client/dist → manifold-app`), which is **ephemeral** — a
+    `docker compose up` (without `--build`) recreates the container from the old
+    image and silently reverts the fix, which likely explains the "still doesn't
+    work" reports across sessions. Rebuilt the image (`docker compose build app`)
+    so the committed fix is baked in, recreated the container, and re-verified the
+    pane opens on a real click. Also cleaned up accumulated stale `index-*.js`
+    bundles (docker cp adds but never removes, so a browser holding an old
+    `index.html` could load pre-fix code — a hard refresh clears it).
 - [x] **3D Activity sizing (size nodes by message rate).** The 2D graph had an
   Activity toggle that swells nodes by their live message rate; the 3D view had
   Flow (colour pulse) but no size equivalent. Added an Activity toggle to the
