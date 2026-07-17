@@ -97,6 +97,7 @@ export default function TopicGraph() {
   const [labelDensity3d, setLabelDensity3d] = useState(0.4);
   const [nodeShape3d, setNodeShape3d] = useState('sphere');
   const [flow3d, setFlow3d] = useState(false);
+  const [beautify2d, setBeautify2d] = useState(false); // 2D visual mode: radial + bloom
   const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
@@ -535,7 +536,12 @@ export default function TopicGraph() {
                 <GraphToolbar
                   showFlow
                   onFit={() => graphRef.current?.fitTo()}
-                  onBeautify={() => setGraphLayout(graphLayout === 'radial' ? DEFAULT_LAYOUT : 'radial')}
+                  onBeautify={() => {
+                    const on = !beautify2d;
+                    setBeautify2d(on);
+                    setGraphLayout(on ? 'radial' : DEFAULT_LAYOUT);
+                  }}
+                  beautifyActive={beautify2d}
                   onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), `topic-graph-${brokerId}.png`)}
                   onExportJson={() => downloadJson(graphRef.current?.exportGraph(), `topic-graph-${brokerId}.json`)}
                   onProperties={() => setPanelOpen(true)}
@@ -565,6 +571,7 @@ export default function TopicGraph() {
                 nodeValues={showValues ? nodeValues : null}
                 matchIds={coverage?.brokerId === brokerId ? coverage.matchIds : matchIds}
                 minimap={showMinimap}
+                beautify={beautify2d}
               />
             )}
             <GraphLegend styleId={graphStyle} groups={groupsPresent} />

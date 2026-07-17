@@ -35,6 +35,7 @@ export default function GraphToolbar({
   layoutValue,
   onLayoutChange,
   onBeautify,
+  beautifyActive,
   onProperties,
   hasSelection = false,
   onExpandLevel
@@ -117,7 +118,7 @@ export default function GraphToolbar({
           // Beautify applies the radial arrangement. It's a toggle, so it lights
           // up only WHILE that layout is active (previously it was styled accent
           // permanently and looked stuck on).
-          <Toggle active={currentLayout === 'radial'} onClick={onBeautify} icon={Sparkles} label="Beautify" />
+          <Toggle active={beautifyActive ?? currentLayout === 'radial'} onClick={onBeautify} icon={Sparkles} label="Beautify" />
         )}
         {onFit && <IconButton onClick={() => onFit()} icon={Maximize2} title="Fit graph to view" />}
         {(onExportPng || onExportJson) && (

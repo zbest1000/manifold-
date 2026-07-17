@@ -40,7 +40,8 @@ const ForceGraph = forwardRef(function ForceGraph(
     matchIds = null,
     focusId = null,
     minimap = false,
-    colorByProtocol = false
+    colorByProtocol = false,
+    beautify = false
   },
   ref
 ) {
@@ -174,10 +175,16 @@ const ForceGraph = forwardRef(function ForceGraph(
     // links entirely when zoomed far out (nodes convey structure).
     const drawLinks = !big || t.k >= 0.3;
     if (drawLinks) {
-      ctx.lineWidth = style.link.width / t.k;
-      ctx.strokeStyle = style.link.color;
+      // Beautify: brighter, slightly thicker links (with a glow when not heavy)
+      // so the topology reads as a lit constellation rather than grey threads.
+      ctx.lineWidth = (beautify ? style.link.width * 1.5 : style.link.width) / t.k;
+      ctx.strokeStyle = beautify ? style.linkHighlight || style.link.color : style.link.color;
+      if (beautify && !heavy) {
+        ctx.shadowColor = style.linkHighlight || style.link.color;
+        ctx.shadowBlur = 6;
+      }
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = beautify ? 0.85 : 1;
       ctx.beginPath();
       const special = [];
       for (const l of links) {
@@ -201,6 +208,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
     }
 
     const showLabels = t.k >= style.showLabelsAtZoom;
@@ -228,7 +236,11 @@ const ForceGraph = forwardRef(function ForceGraph(
       ctx.globalAlpha = alpha;
 
       let glow = 0;
-      if (!heavy) glow = (style.node.glow || 0) + Math.min(rate, 4) * 6;
+      if (!heavy) {
+        glow = (style.node.glow || 0) + Math.min(rate, 4) * 6;
+        // Beautify: a persistent bloom halo around every node, brighter on hubs.
+        if (beautify) glow = Math.max(glow, 8 + Math.min(r, 14) * 0.7);
+      }
       if (glow > 0) {
         ctx.shadowColor = color;
         ctx.shadowBlur = glow;
@@ -336,7 +348,7 @@ const ForceGraph = forwardRef(function ForceGraph(
     ctx.restore();
 
     if (minimap) drawMinimap(ctx, nodes, transformRef.current, sizeRef.current, style, colorFor);
-  }, [style, selectedId, activitySize, nodeValues, valueZoom, matchIds, focusId, minimap, colorFor]);
+  }, [style, selectedId, activitySize, nodeValues, valueZoom, matchIds, focusId, minimap, colorFor, beautify]);
 
   useEffect(() => {
     drawRef.current = draw;
