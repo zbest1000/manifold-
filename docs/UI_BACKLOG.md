@@ -46,6 +46,11 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] CESMII time-series start/end were free-text fields in exact SMIP format, so
+  any typo gave an empty chart. Replaced with datetime-local pickers plus Last
+  1h/24h/7d/30d presets and a max-samples field; the local values convert to the
+  SMIP UTC form on query. Verified end-to-end against the mock (preset → reload →
+  chart renders). (`pages/Cesmii.jsx`.)
 - [x] Pipelines transform editor fought the user mid-type: the set / rename /
   pick inputs derived their value from the parsed model every render, so a
   half-typed value (`{"site":`) was rejected and reverted on each keystroke,
