@@ -1,13 +1,26 @@
 import { useState } from 'react';
-import { Sparkles, RotateCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Sparkles, RotateCw, ChevronDown, ChevronUp, Tag } from 'lucide-react';
 import clsx from 'clsx';
 
 /**
  * Look-and-feel controls for the 3D graph view: Beautify (depth-graded colours,
- * glowing links, slow spin), an auto-rotate toggle, and node-size / link-opacity
- * sliders. Shared by every 3D graph (Topics, i3X, OPC UA).
+ * glowing links, slow spin), auto-rotate, a Values toggle, and node-size /
+ * link-opacity / label-density sliders. Shared by every 3D graph.
  */
-export default function Graph3DControls({ beautify, onBeautify, autoRotate, onAutoRotate, nodeScale, onNodeScale, linkOpacity, onLinkOpacity }) {
+export default function Graph3DControls({
+  beautify,
+  onBeautify,
+  autoRotate,
+  onAutoRotate,
+  nodeScale,
+  onNodeScale,
+  linkOpacity,
+  onLinkOpacity,
+  labelDensity,
+  onLabelDensity,
+  showValues,
+  onShowValues
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="absolute left-4 top-4 z-10 w-52 overflow-hidden rounded-xl border border-white/10 bg-surface-900/80 text-slate-300 backdrop-blur">
@@ -32,15 +45,37 @@ export default function Graph3DControls({ beautify, onBeautify, autoRotate, onAu
       </div>
       {open && (
         <div className="space-y-3 border-t border-white/5 px-3 py-3">
-          <button
-            onClick={onAutoRotate}
-            className={clsx(
-              'flex w-full items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
-              autoRotate ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
+          <div className="flex gap-2">
+            <button
+              onClick={onAutoRotate}
+              className={clsx(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
+                autoRotate ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
+              )}
+            >
+              <RotateCw size={13} className={autoRotate ? 'text-accent-300' : ''} /> Rotate
+            </button>
+            {onShowValues && (
+              <button
+                onClick={onShowValues}
+                title="Show each labelled node's latest value"
+                className={clsx(
+                  'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition',
+                  showValues ? 'border-accent-500/40 bg-accent-500/15 text-accent-200' : 'border-white/10 text-slate-400 hover:text-slate-200'
+                )}
+              >
+                <Tag size={13} className={showValues ? 'text-accent-300' : ''} /> Values
+              </button>
             )}
-          >
-            <RotateCw size={13} className={autoRotate ? 'text-accent-300' : ''} /> Auto-rotate
-          </button>
+          </div>
+          {onLabelDensity && (
+            <label className="block">
+              <span className="mb-1 flex justify-between text-[11px] text-slate-400">
+                Labels <span className="tabular-nums text-slate-500">{labelDensity <= 0.001 ? 'off' : `${Math.round(labelDensity * 100)}%`}</span>
+              </span>
+              <input type="range" min="0" max="1" step="0.05" value={labelDensity} onChange={(e) => onLabelDensity(Number(e.target.value))} className="w-full accent-accent-500" />
+            </label>
+          )}
           <label className="block">
             <span className="mb-1 flex justify-between text-[11px] text-slate-400">
               Node size <span className="tabular-nums text-slate-500">{nodeScale.toFixed(1)}×</span>

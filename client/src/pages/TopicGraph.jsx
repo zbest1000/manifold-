@@ -71,6 +71,7 @@ export default function TopicGraph() {
   const flowEnabled = useStore((s) => s.flowEnabled);
   const activitySize = useStore((s) => s.activitySize);
   const showValues = useStore((s) => s.showValues);
+  const setShowValues = useStore((s) => s.setShowValues);
   const showMinimap = useStore((s) => s.showMinimap);
   const setTopics = useStore((s) => s.setTopics);
 
@@ -96,6 +97,7 @@ export default function TopicGraph() {
   const [linkOpacity3d, setLinkOpacity3d] = useState(0.35);
   const [autoRotate3d, setAutoRotate3d] = useState(false);
   const [beautify3d, setBeautify3d] = useState(false);
+  const [labelDensity3d, setLabelDensity3d] = useState(0.4);
   const FORCE_MAX = 30000; // force-layout worker node cap
   const graphRef = useRef(null);
   const graph3dRef = useRef(null);
@@ -458,6 +460,9 @@ export default function TopicGraph() {
                 linkOpacity={linkOpacity3d}
                 autoRotate={autoRotate3d}
                 beautify={beautify3d}
+                labelDensity={labelDensity3d}
+                showValues={showValues}
+                nodeValues={showValues ? nodeValues : null}
               />
             </Suspense>
             <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
@@ -493,6 +498,10 @@ export default function TopicGraph() {
               onNodeScale={setNodeScale3d}
               linkOpacity={linkOpacity3d}
               onLinkOpacity={setLinkOpacity3d}
+              labelDensity={labelDensity3d}
+              onLabelDensity={setLabelDensity3d}
+              showValues={showValues}
+              onShowValues={() => setShowValues(!showValues)}
             />
             <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-white/10 bg-surface-900/70 px-3 py-2 text-[11px] text-slate-500 backdrop-blur">
               Drag to rotate. Scroll to zoom. Click a node for details. The style dropdown up top restyles this view too.

@@ -723,18 +723,23 @@ const ForceGraph = forwardRef(function ForceGraph(
       }
     };
 
+    // pointerdown stays on the canvas (so downPos is only set for presses that
+    // begin on the graph). pointerup/pointermove go on WINDOW: d3-zoom and
+    // d3-drag are bound to this same canvas and preempt canvas-level pointerup,
+    // so a plain left-click's onUp never fired and selection silently failed.
+    // The 3D renderer already uses window listeners for exactly this reason.
     canvas.addEventListener('pointerdown', onDown);
-    canvas.addEventListener('pointerup', onUp);
+    window.addEventListener('pointerup', onUp);
     canvas.addEventListener('dblclick', onDblClick);
-    canvas.addEventListener('pointermove', onMove);
+    window.addEventListener('pointermove', onMove);
     canvas.addEventListener('contextmenu', onContext);
 
     return () => {
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onDown);
-      canvas.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('dblclick', onDblClick);
-      canvas.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('contextmenu', onContext);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

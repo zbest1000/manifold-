@@ -14,7 +14,8 @@ import { groupColor, PROTOCOL_COLORS } from './buildGraph';
 const CAM_DIST = 950;
 const FOV = 50;
 const MAX_3D_NODES = 50000; // GPU instancing keeps this smooth
-const LABEL_COUNT = 40; // sprite labels for the highest-degree nodes only
+const LABEL_MAX = 400; // ceiling for sprite labels; labelDensity scales within it
+const VALUE_LABEL_MAX = 90; // fewer when live values are on (sprites rebuild per poll)
 const LINK_OPACITY = 0.35;
 const IDLE_MS = 2000; // keep the rAF loop alive this long after interaction
 const AUTO_ROTATE_SPEED = 0.0022; // rad/frame — a slow, cinematic spin
@@ -37,34 +38,58 @@ function truncateLabel(label) {
   return s.length > 20 ? `${s.slice(0, 19)}…` : s;
 }
 
-/** Canvas-textured billboard label (halo + fill from the style's label colors). */
-function makeLabelSprite(text, labelStyle) {
-  const fontSize = 28;
+/**
+ * Canvas-textured billboard label (halo + fill from the style's label colors).
+ * If `valueText` is given it's drawn as a second, accent-coloured line, so the
+ * 3D view can show each node's latest value like the 2D "Values" overlay.
+ */
+function makeLabelSprite(text, labelStyle, valueText) {
+  const nameSize = 28;
+  const valSize = 23;
   const pad = 10;
-  const font = `600 ${fontSize}px Inter, sans-serif`;
+  const gap = 5;
+  const nameFont = `600 ${nameSize}px Inter, sans-serif`;
+  const valFont = `500 ${valSize}px 'JetBrains Mono', monospace`;
   const canvas = document.createElement('canvas');
   let ctx = canvas.getContext('2d');
-  ctx.font = font;
-  const w = Math.max(2, Math.ceil(ctx.measureText(text).width) + pad * 2);
-  const h = fontSize + pad * 2;
+  ctx.font = nameFont;
+  const nameW = Math.ceil(ctx.measureText(text).width);
+  let valW = 0;
+  if (valueText) {
+    ctx.font = valFont;
+    valW = Math.ceil(ctx.measureText(valueText).width);
+  }
+  const w = Math.max(2, Math.max(nameW, valW) + pad * 2);
+  const h = (valueText ? nameSize + gap + valSize : nameSize) + pad * 2;
   canvas.width = w;
   canvas.height = h;
   ctx = canvas.getContext('2d');
-  ctx.font = font;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.textBaseline = 'top';
+  // Name line
+  ctx.font = nameFont;
   ctx.lineWidth = 6;
   ctx.strokeStyle = labelStyle.halo;
-  ctx.strokeText(text, w / 2, h / 2);
+  ctx.strokeText(text, w / 2, pad);
   ctx.fillStyle = labelStyle.color;
-  ctx.fillText(text, w / 2, h / 2);
+  ctx.fillText(text, w / 2, pad);
+  // Value line (accent, dimmer)
+  if (valueText) {
+    ctx.font = valFont;
+    const vy = pad + nameSize + gap;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = labelStyle.halo;
+    ctx.strokeText(valueText, w / 2, vy);
+    ctx.fillStyle = '#7dd3fc';
+    ctx.fillText(valueText, w / 2, vy);
+  }
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  const worldH = 15; // world units; perspective scales it with distance
-  sprite.scale.set(worldH * (w / h), worldH, 1);
+  const px2world = 15 / (nameSize + pad * 2); // single-line height => 15 world units
+  sprite.scale.set(w * px2world, h * px2world, 1);
   return sprite;
 }
 
@@ -91,7 +116,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
     nodeScale = 1, // 0.5–2  point-size multiplier
     linkOpacity = LINK_OPACITY, // 0–0.8  link line opacity
     autoRotate = false, // gentle continuous spin
-    beautify = false // depth-graded colours + glow + auto-rotate
+    beautify = false, // depth-graded colours + glow + auto-rotate
+    labelDensity = 0.4, // 0–1  fraction of LABEL_MAX nodes to name
+    showValues = false, // draw each labelled node's latest value
+    nodeValues = null // { [nodeId]: value } for the value line
   },
   ref
 ) {
@@ -360,17 +388,10 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       group.add(new THREE.LineSegments(lineGeo, lineMat));
     }
 
-    // Labels: sprites for the highest-degree nodes only (text is expensive).
+    // Labels are built (and rebuilt on density / value changes) by a dedicated
+    // effect below, so a value refresh doesn't rebuild the whole scene.
     const labelGroup = new THREE.Group();
     const labeled = new Set();
-    const byDegree = nodes.slice().sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, LABEL_COUNT);
-    for (const n of byDegree) {
-      if (!n.label) continue;
-      const sprite = makeLabelSprite(truncateLabel(n.label), style.label);
-      positionLabel(sprite, n);
-      labelGroup.add(sprite);
-      labeled.add(n.id);
-    }
     group.add(labelGroup);
 
     // Selection highlight: a wireframe shell scaled around the selected node.
@@ -392,6 +413,49 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       objsRef.current = null;
     };
   }, [data, style, colorFor]);
+
+  // Labels: name (and, with Values on, the latest value) for the top-degree
+  // nodes, up to a density-scaled cap. Rebuilds on density / value changes only,
+  // not on every scene rebuild. When Values is on, nodeValues changes each poll,
+  // so labels refresh live (capped lower to keep the sprite churn cheap).
+  useEffect(() => {
+    const three = threeRef.current;
+    const objs = objsRef.current;
+    if (!three || !objs?.labelGroup) return;
+    const { labelGroup, labeled } = objs;
+    for (const c of [...labelGroup.children]) {
+      if (c === selSpriteRef.current) continue;
+      labelGroup.remove(c);
+      disposeObject(c);
+    }
+    labeled.clear();
+    const nodes = nodesRef.current;
+    const cap = Math.min(showValues ? VALUE_LABEL_MAX : LABEL_MAX, Math.max(0, Math.round(LABEL_MAX * labelDensity)));
+    // With Values on, prefer nodes that actually HAVE a value (leaves) so the
+    // data is visible; otherwise rank by degree so the structural hubs are named.
+    const ranked = nodes.slice().sort((a, b) => {
+      if (showValues && nodeValues) {
+        const av = nodeValues[a.id] != null && nodeValues[a.id] !== '' ? 1 : 0;
+        const bv = nodeValues[b.id] != null && nodeValues[b.id] !== '' ? 1 : 0;
+        if (av !== bv) return bv - av;
+      }
+      return (b.degree || 0) - (a.degree || 0);
+    });
+    const byDegree = ranked.slice(0, cap);
+    for (const n of byDegree) {
+      if (!n.label) continue;
+      let valueText;
+      if (showValues && nodeValues) {
+        const v = nodeValues[n.id];
+        if (v != null && v !== '') valueText = String(v).slice(0, 18);
+      }
+      const sprite = makeLabelSprite(truncateLabel(n.label), style.label, valueText);
+      positionLabel(sprite, n);
+      labelGroup.add(sprite);
+      labeled.add(n.id);
+    }
+    three.requestRender();
+  }, [data, style, labelDensity, showValues, nodeValues]);
 
   // Auto-rotate is driven by a ref the render loop reads; Beautify also spins.
   useEffect(() => {
@@ -476,7 +540,9 @@ const ForceGraph3D = forwardRef(function ForceGraph3D(
       highlight.position.set(node.x, node.y, node.z);
       highlight.scale.setScalar(nodeRadius(node) * nodeScaleRef.current + 3);
       if (node.label && !labeled.has(node.id)) {
-        const sprite = makeLabelSprite(truncateLabel(node.label), style.label);
+        const v = nodeValues ? nodeValues[node.id] : null;
+        const valueText = v != null && v !== '' ? String(v).slice(0, 18) : undefined;
+        const sprite = makeLabelSprite(truncateLabel(node.label), style.label, valueText);
         positionLabel(sprite, node);
         labelGroup.add(sprite);
         selSpriteRef.current = sprite;
