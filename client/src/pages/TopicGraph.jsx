@@ -483,7 +483,7 @@ export default function TopicGraph() {
           <div className="relative flex-1">
             {!showAll && (
               <>
-                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} onSelect={selectNode} />
                 <GraphToolbar
                   showFlow
                   onFit={() => graphRef.current?.fitTo()}

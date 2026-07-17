@@ -523,10 +523,26 @@ function computeDegree(nodes, links) {
 // Stable color assignment per group index, resolved against the active palette.
 export const GROUP_ORDER = ['broker', 'server', 'topic', 'telemetry', 'data', 'command', 'config', 'alarm', 'sparkplug'];
 
+// Fixed, semantic colour per node group. Previously groupColor indexed into the
+// active style's palette (palette[idx % len]) — but the styles are short and
+// sometimes single-hue, so different groups collided to the SAME colour and the
+// legend couldn't tell them apart. These nine distinct hues are shared by every
+// renderer AND the legend (both call groupColor), so the legend always matches
+// the on-screen node colour, and each group is now visually distinct.
+export const GROUP_COLORS = {
+  broker: '#a78bfa', // violet — the root/broker
+  server: '#818cf8', // indigo — OPC UA / i3X server root
+  topic: '#38bdf8', // sky — branch (intermediate topic)
+  telemetry: '#34d399', // green — live/connected telemetry
+  data: '#fbbf24', // amber — leaf data topics
+  command: '#f472b6', // pink — command topics
+  config: '#2dd4bf', // teal — configuration
+  alarm: '#fb7185', // red — alarm / offline / dormant
+  sparkplug: '#fb923c' // orange — Sparkplug
+};
+
 export function groupColor(group, palette) {
-  const idx = GROUP_ORDER.indexOf(group);
-  if (idx === -1) return palette[0];
-  return palette[idx % palette.length];
+  return GROUP_COLORS[group] || palette?.[0] || '#38bdf8';
 }
 
 /**

@@ -289,7 +289,7 @@ export default function I3x() {
               <EmptyState icon={Layers} title="No objects returned" hint="This i3X server exposed no objects." />
             ) : (
               <>
-                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} />
+                <GraphSearch nodes={graph.nodes} onMatches={setMatchIds} onFit={(ids) => graphRef.current?.fitTo(ids)} onSelect={selectNode} />
                 <GraphToolbar
                   onFit={() => graphRef.current?.fitTo()}
                   onExportPng={() => downloadDataUrl(graphRef.current?.exportPng(), 'i3x-graph.png')}
