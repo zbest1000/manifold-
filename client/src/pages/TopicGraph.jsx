@@ -510,6 +510,11 @@ export default function TopicGraph() {
             node={selected}
             brokerId={brokerId}
             messages={liveMsgs}
+            graph={graph}
+            onJump={(id) => {
+              const n = graph.nodes.find((x) => x.id === id);
+              if (n) setSelected(n);
+            }}
             onClose={() => setSelected(null)}
           />
         )}
@@ -542,7 +547,33 @@ function SegBtn({ active, onClick, disabled, title, children }) {
   );
 }
 
-function TopicPanel({ node, brokerId, messages, onClose }) {
+// Resolve a link endpoint whether it's still an id string or a d3-mutated node object.
+const endId = (e) => (e && typeof e === 'object' ? e.id : e);
+
+// One labelled row in the Location card (Parent / Siblings / Children).
+function RelRow({ label, children }) {
+  return (
+    <div className="mb-2 flex items-start gap-2 last:mb-0">
+      <span className="mt-1 w-16 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+// A jump-to-node chip for a neighbouring topic.
+function RelChip({ node, onJump }) {
+  return (
+    <button
+      onClick={() => onJump?.(node.id)}
+      title={`Jump to ${node.meta?.fullTopic || node.label}`}
+      className="mono inline-flex max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px] text-slate-300 transition hover:border-accent-500/40 hover:bg-accent-500/10 hover:text-accent-200"
+    >
+      <span className="truncate">{node.label}</span>
+    </button>
+  );
+}
+
+function TopicPanel({ node, brokerId, messages, graph, onJump, onClose }) {
   const meta = node.meta || {};
   const fullTopic = meta.fullTopic;
   const [history, setHistory] = useState([]);
@@ -615,6 +646,19 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
     .filter((p) => p.v != null && Number.isFinite(p.ts));
   const numericSeries = numericPoints.map((p) => p.v);
 
+  // Neighbours in the topic tree, from the graph's parent→child links: the
+  // parent, the siblings under it, and this node's own children. Each is
+  // clickable to jump the selection there.
+  const links = graph?.links || [];
+  const nodeById = (id) => graph?.nodes.find((n) => n.id === id) || null;
+  const parentId = links.find((l) => endId(l.target) === node.id) ? endId(links.find((l) => endId(l.target) === node.id).source) : null;
+  const parentNode = parentId ? nodeById(parentId) : null;
+  const siblings = parentId
+    ? links.filter((l) => endId(l.source) === parentId).map((l) => endId(l.target)).filter((id) => id !== node.id).map(nodeById).filter(Boolean)
+    : [];
+  const children = links.filter((l) => endId(l.source) === node.id).map((l) => endId(l.target)).map(nodeById).filter(Boolean);
+  const segments = fullTopic ? fullTopic.split('/') : [];
+
   const inner = (
     <>
       <div className="flex items-start justify-between gap-2 border-b border-white/5 px-4 py-3">
@@ -656,6 +700,61 @@ function TopicPanel({ node, brokerId, messages, onClose }) {
               label="Last seen"
               value={meta.lastActivity ? formatDistanceToNow(new Date(meta.lastActivity), { addSuffix: true }) : '—'}
             />
+          </div>
+        )}
+
+        {/* Location in the topic tree: a clickable breadcrumb plus the parent,
+            siblings, and children as jump targets. */}
+        {fullTopic && (parentNode || siblings.length > 0 || children.length > 0 || segments.length > 1) && (
+          <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Location</p>
+            <div className="mb-3 flex flex-wrap items-center text-[11px]">
+              {segments.map((seg, i) => {
+                const last = i === segments.length - 1;
+                const path = segments.slice(0, i + 1).join('/');
+                return (
+                  <span key={i} className="flex items-center">
+                    {i > 0 && <span className="px-0.5 text-slate-600">/</span>}
+                    {last ? (
+                      <span className="mono font-medium text-slate-200">{seg}</span>
+                    ) : (
+                      <button
+                        onClick={() => onJump?.(`topic:${brokerId}:${path}`)}
+                        title={`Jump to ${path}`}
+                        className="mono rounded px-1 py-0.5 text-slate-400 transition hover:bg-white/10 hover:text-accent-300"
+                      >
+                        {seg}
+                      </button>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+            {parentNode && (
+              <RelRow label="Parent">
+                <RelChip node={parentNode} onJump={onJump} />
+              </RelRow>
+            )}
+            {siblings.length > 0 && (
+              <RelRow label={`Siblings ${siblings.length}`}>
+                <div className="flex flex-wrap gap-1">
+                  {siblings.slice(0, 30).map((s) => (
+                    <RelChip key={s.id} node={s} onJump={onJump} />
+                  ))}
+                  {siblings.length > 30 && <span className="self-center text-[10px] text-slate-500">+{siblings.length - 30} more</span>}
+                </div>
+              </RelRow>
+            )}
+            {children.length > 0 && (
+              <RelRow label={`Children ${children.length}`}>
+                <div className="flex flex-wrap gap-1">
+                  {children.slice(0, 30).map((c) => (
+                    <RelChip key={c.id} node={c} onJump={onJump} />
+                  ))}
+                  {children.length > 30 && <span className="self-center text-[10px] text-slate-500">+{children.length - 30} more</span>}
+                </div>
+              </RelRow>
+            )}
           </div>
         )}
 
