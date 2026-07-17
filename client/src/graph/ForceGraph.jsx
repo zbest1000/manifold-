@@ -666,6 +666,11 @@ const ForceGraph = forwardRef(function ForceGraph(
       return null;
     };
 
+    // Press position (client px) for the current drag, so 'end' can tell a click
+    // from a real drag. d3-drag owns the pointer once a node is the subject, so
+    // the window pointerup below never sees a node click — selection has to
+    // happen here instead.
+    let dragStartClient = null;
     const dragBehavior = drag()
       .container(canvas)
       .subject((event) => {
@@ -675,6 +680,7 @@ const ForceGraph = forwardRef(function ForceGraph(
       })
       .on('start', (event) => {
         if (!event.subject) return;
+        dragStartClient = { x: event.sourceEvent.clientX, y: event.sourceEvent.clientY };
         if (simRef.current) simRef.current.alphaTarget(0.25).restart();
         event.subject.fx = event.subject.x;
         event.subject.fy = event.subject.y;
@@ -689,6 +695,15 @@ const ForceGraph = forwardRef(function ForceGraph(
       .on('end', (event) => {
         if (!event.subject) return;
         if (simRef.current) simRef.current.alphaTarget(0);
+        // A press that barely moved is a click, not a drag: select the node
+        // (opens the properties panel). Without this, clicking a node in any
+        // graph under the big-mode threshold never selected it, because d3-drag
+        // captured the gesture and the window pointerup never fired onUp.
+        const up = event.sourceEvent;
+        const moved =
+          dragStartClient && up ? Math.hypot(up.clientX - dragStartClient.x, up.clientY - dragStartClient.y) : Infinity;
+        dragStartClient = null;
+        if (moved <= 5) cbRef.current.onSelect?.(event.subject);
         // Keep nodes pinned in tree mode; release them in free-form layouts.
         if (layoutModeRef.current !== 'tree') {
           event.subject.fx = null;

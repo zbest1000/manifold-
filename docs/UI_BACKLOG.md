@@ -61,9 +61,10 @@ PR that closed them is noted inline.
 ## Done (recent)
 
 - [x] **Graph overhaul (2D + 3D).** A large batch driven by user reports:
-  - Properties click bug: 2D left-click selection ran on the canvas, which
-    d3-zoom/d3-drag preempt, so selection silently failed (only tree/3D worked).
-    Moved the selection pointerup/pointermove to `window` (like the 3D renderer).
+  - Properties click bug (first attempt, incomplete): moved the selection
+    pointerup/pointermove to `window`. This addressed d3-*zoom* but NOT d3-*drag*,
+    which was the real swallower — see the dedicated entry below for the actual
+    fix.
   - Search-to-select: the graph search now has a clickable results dropdown that
     selects a node and opens its properties — reliable in a dense graph.
   - Legend fix: `groupColor` collided groups to the same colour via
@@ -83,6 +84,23 @@ PR that closed them is noted inline.
     dedicated entry below.
   - The graph-overhaul batch (all of the user's explicit graph asks) is now
     complete.
+- [x] **Property pane didn't open on canvas click (real root cause).** User
+  reported the property pane "still does not work" after the earlier window-listener
+  attempt. Reproduced with a *real* CDP mouse click (not a synthetic event, which
+  wouldn't expose it) and traced it: `ForceGraph`'s d3-drag has a `.subject()` that
+  returns the node under the cursor for any graph below the big-mode threshold
+  (`nodes.length > 4000`) — i.e. essentially every graph (Topics, i3X, collapsed
+  views). Once d3-drag's subject is a node, d3-drag owns the pointer for that
+  gesture and suppresses the native pointer events, so the window `pointerup` never
+  fired `onUp`/`onSelect`. The drag `end` handler only pinned the node — it never
+  selected. No external listener can recover an event d3-drag owns, so selection
+  had to move *into* the gesture: the drag `end` handler now treats a press that
+  barely moved (≤5px) as a click and calls `onSelect(subject)`, opening the panel.
+  Verified with real mouse clicks on the running demo: clicking a Topics node
+  opened its panel (`spBv1.0/Plant1/NBIRTH/Line1`), and an i3X node opened its
+  panel (`Compressed Air / utilities.air`); Properties button enabled in both.
+  Big-mode graphs (>4000 nodes) still select via the window `onUp` path (subject
+  returns null there, so d3-drag doesn't capture). (`graph/ForceGraph.jsx`.)
 - [x] **3D Activity sizing (size nodes by message rate).** The 2D graph had an
   Activity toggle that swells nodes by their live message rate; the 3D view had
   Flow (colour pulse) but no size equivalent. Added an Activity toggle to the
