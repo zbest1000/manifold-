@@ -30,15 +30,14 @@ PR that closed them is noted inline.
   over-zoom above and makes the paper canvas very tall. Mounts probably want to
   seed collapsed (root only), unlike broker namespaces which seed to level 1.
 
-### Low
+### High
 
-- [ ] **Small object graphs lay out as a horizontal line with overlapping
-  labels.** Discovered on the i3X page with the 11-node mock hierarchy: the force
-  layout leaves all nodes on one row and the labels ("Manifold Mock i3X", "Acme
-  Plant", "Temperature"/"Speed"…) overlap. Same renderer as Topics, so it affects
-  any small graph. Fix: for graphs under ~20 nodes, prefer the radial/tree layout
-  by default, or bump label collision spacing at low node counts.
-  (`graph/ForceGraph.jsx`, layout seeding in `pages/I3x.jsx`.)
+- [ ] **One shared Y axis flattens mixed-magnitude tags.** Now easy to hit on
+  Trends: charting `speed_rpm` (~1450) with `temperature` (~50) pins the
+  temperature to a flat line at the axis floor. Fix: a normalize toggle or a
+  dual/secondary Y axis, and show units. (`components/TrendChart.jsx`.)
+
+### Low
 
 - [ ] **System "Process health" sparklines are blank right after a restart.**
   Expected (needs ≥2 samples, ~6s) but reads as broken on first paint. Consider a
@@ -53,6 +52,23 @@ PR that closed them is noted inline.
 
 ## Done (recent)
 
+- [x] Trends read empty out of the box and, worse, a file recording of the demo
+  charted nothing because `recorder.series()` did `Number(objectPayload)` = NaN.
+  Fixed the numeric extraction (handles `{value,unit}`), added a searchable
+  captured-tags endpoint, seeded an always-on "Built-in historian" recording
+  (`factory/#`), and defaulted Trends to it. Trends now has real persisted
+  history on first load, no external DB. (Chose the existing JSONL recorder over
+  a new SQLite native dep.)
+- [x] Small object graphs (e.g. the i3X hierarchy) collapsed onto one horizontal
+  line. Root cause: `treePositions` read `link.source/target` after d3's
+  forceLink had mutated them from id strings to node objects, so every node
+  looked parentless. Made it endpoint-agnostic and widened the tree gaps; small
+  graphs now render as proper trees.
+- [x] Right-click to open node properties was unreliable (OS/browser swallows the
+  contextmenu). Replaced with a discoverable Properties button in the shared
+  GraphToolbar and 3D controls (Topics, i3X, everywhere), tracking panelOpen so
+  closing the panel no longer loses access. Extracted a shared GraphLegend used
+  across views.
 - [x] i3X and CESMII SMIP pages had no server to talk to locally, so they read as
   dead. Added two Docker mock servers (`docker/i3x-mock`, `docker/cesmii-mock`)
   wired into the demo compose stack; verified end-to-end (connect, catalog,
