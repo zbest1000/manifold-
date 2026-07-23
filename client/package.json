@@ -23,7 +23,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hot-toast": "^2.4.1",
-    "react-router-dom": "^6.26.1",
+    "react-router-dom": "^7.18.1",
     "socket.io-client": "^4.7.5",
     "three": "^0.185.1",
     "uplot": "^1.6.32",
