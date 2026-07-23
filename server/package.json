@@ -15,7 +15,7 @@
     "express": "^4.18.2",
     "express-rate-limit": "^8.5.2",
     "helmet": "^7.2.0",
-    "mqtt": "^5.3.4",
+    "mqtt": "^5.15.2",
     "node-opcua-client": "^2.174.0",
     "pg": "^8.22.0",
     "protobufjs": "^8.7.1",
