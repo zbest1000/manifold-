@@ -16,7 +16,7 @@
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
-    "date-fns": "^3.6.0",
+    "date-fns": "^4.4.0",
     "framer-motion": "^11.5.4",
     "lucide": "^1.24.0",
     "lucide-react": "^1.24.0",
